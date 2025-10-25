@@ -1,0 +1,446 @@
+package com.example.smart.ble
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import androidx.core.app.ActivityCompat
+import com.example.smart.model.Direction
+import com.example.smart.model.NavigationData
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import java.util.UUID
+
+/**
+ * Working BLE Service based on proven SimpleBLEService
+ * Includes message queuing and integration with main app
+ */
+class WorkingBLEService(private val context: Context) {
+    
+    companion object {
+        private const val TAG = "WorkingBLEService"
+        private const val ESP32_DEVICE_NAME = "ESP32_BLE"
+        private const val SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab"
+        private const val CHARACTERISTIC_UUID = "abcd1234-5678-90ab-cdef-1234567890ab"
+        private const val SCAN_TIMEOUT = 10000L
+    }
+    
+    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
+    private val bluetoothLeScanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
+    
+    private var bluetoothGatt: BluetoothGatt? = null
+    private var navigationCharacteristic: BluetoothGattCharacteristic? = null
+    private var isScanning = false
+    private var isConnected = false
+    
+    private val messageQueue = mutableListOf<NavigationData>()
+    private val handler = Handler(Looper.getMainLooper())
+    
+    // State flows for UI updates (compatible with existing MainActivity)
+    private val _connectionStatus = MutableStateFlow(BLEConnectionStatus())
+    val connectionStatus: StateFlow<BLEConnectionStatus> = _connectionStatus.asStateFlow()
+    
+    private val _isScanning = MutableStateFlow(false)
+    val isScanningState: StateFlow<Boolean> = _isScanning.asStateFlow()
+    
+    data class BLEConnectionStatus(
+        val isConnected: Boolean = false,
+        val deviceName: String? = null,
+        val deviceAddress: String? = null,
+        val queuedMessages: Int = 0
+    )
+    
+    private val scanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val device = result.device
+            val deviceName = device.name ?: "Unknown"
+            
+            Log.d(TAG, "Found device: $deviceName (${device.address})")
+            
+            if (deviceName.contains(ESP32_DEVICE_NAME, ignoreCase = true)) {
+                Log.i(TAG, "✅ Found ESP32 device: $deviceName")
+                stopScanning()
+                connectToDevice(device)
+            }
+        }
+        
+        override fun onScanFailed(errorCode: Int) {
+            Log.e(TAG, "❌ BLE scan failed with error: $errorCode")
+            isScanning = false
+            _isScanning.value = false
+        }
+    }
+    
+    private val gattCallback = object : BluetoothGattCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            Log.i(TAG, "=== GATT CONNECTION STATE CHANGE ===")
+            Log.i(TAG, "Device: ${gatt.device.name} (${gatt.device.address})")
+            Log.i(TAG, "Status: $status (0=SUCCESS)")
+            Log.i(TAG, "New State: $newState (2=CONNECTED, 0=DISCONNECTED)")
+            
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        Log.i(TAG, "✅ GATT CONNECTION SUCCESSFUL!")
+                        isConnected = true
+                        bluetoothGatt = gatt
+                        
+                        _connectionStatus.value = BLEConnectionStatus(
+                            isConnected = true,
+                            deviceName = gatt.device.name ?: "ESP32_BLE",
+                            deviceAddress = gatt.device.address,
+                            queuedMessages = messageQueue.size
+                        )
+                        
+                        Log.i(TAG, "Starting service discovery...")
+                        val discoveryStarted = gatt.discoverServices()
+                        Log.i(TAG, "Service discovery started: $discoveryStarted")
+                    } else {
+                        Log.e(TAG, "❌ GATT connection failed with status: $status")
+                        isConnected = false
+                        _connectionStatus.value = _connectionStatus.value.copy(isConnected = false)
+                    }
+                }
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    Log.i(TAG, "❌ GATT DISCONNECTED")
+                    isConnected = false
+                    bluetoothGatt = null
+                    navigationCharacteristic = null
+                    _connectionStatus.value = BLEConnectionStatus(
+                        isConnected = false,
+                        deviceName = null,
+                        deviceAddress = null,
+                        queuedMessages = messageQueue.size
+                    )
+                }
+            }
+        }
+        
+        @SuppressLint("MissingPermission")
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            Log.i(TAG, "=== SERVICES DISCOVERED ===")
+            Log.i(TAG, "Status: $status")
+            
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val services = gatt.services
+                Log.i(TAG, "Found ${services.size} services")
+                
+                val targetServiceUUID = UUID.fromString(SERVICE_UUID)
+                val service = gatt.getService(targetServiceUUID)
+                
+                if (service != null) {
+                    Log.i(TAG, "✅ Found target service: $SERVICE_UUID")
+                    
+                    val targetCharUUID = UUID.fromString(CHARACTERISTIC_UUID)
+                    navigationCharacteristic = service.getCharacteristic(targetCharUUID)
+                    
+                    if (navigationCharacteristic != null) {
+                        Log.i(TAG, "✅ Found target characteristic: $CHARACTERISTIC_UUID")
+                        val properties = navigationCharacteristic!!.properties
+                        Log.i(TAG, "Characteristic properties: $properties")
+                        Log.i(TAG, "Supports WRITE: ${(properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0}")
+                        Log.i(TAG, "🎉 READY TO SEND DATA!")
+                        
+                        // Process any queued messages
+                        processQueuedMessages()
+                    } else {
+                        Log.e(TAG, "❌ Target characteristic not found")
+                    }
+                } else {
+                    Log.e(TAG, "❌ Target service not found")
+                    Log.e(TAG, "Available services:")
+                    services.forEach { svc ->
+                        Log.e(TAG, "  - ${svc.uuid}")
+                    }
+                }
+            } else {
+                Log.e(TAG, "❌ Service discovery failed with status: $status")
+            }
+        }
+        
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i(TAG, "✅ Data written successfully to ESP32!")
+            } else {
+                Log.e(TAG, "❌ Failed to write data: $status")
+            }
+        }
+    }
+    
+    private fun hasPermissions(): Boolean {
+        return ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+               ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+               ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+    
+    @SuppressLint("MissingPermission")
+    fun startScanning() {
+        Log.i(TAG, "=== STARTING BLE CONNECTION ===")
+        
+        if (!hasPermissions()) {
+            Log.e(TAG, "❌ Missing required permissions")
+            return
+        }
+        
+        if (bluetoothAdapter?.isEnabled != true) {
+            Log.e(TAG, "❌ Bluetooth is not enabled")
+            return
+        }
+        
+        if (isScanning) {
+            Log.d(TAG, "Already scanning")
+            return
+        }
+        
+        if (isConnected) {
+            Log.d(TAG, "Already connected")
+            return
+        }
+        
+        val scanFilter = ScanFilter.Builder()
+            .setDeviceName(ESP32_DEVICE_NAME)
+            .build()
+        
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        
+        try {
+            bluetoothLeScanner?.startScan(listOf(scanFilter), scanSettings, scanCallback)
+            isScanning = true
+            _isScanning.value = true
+            Log.i(TAG, "Started scanning for ESP32 device...")
+            
+            // Stop scanning after timeout
+            handler.postDelayed({
+                if (isScanning) {
+                    stopScanning()
+                    Log.i(TAG, "Scan timeout - stopping scan")
+                }
+            }, SCAN_TIMEOUT)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "❌ Security exception during scan: ${e.message}")
+        }
+    }
+    
+    @SuppressLint("MissingPermission")
+    private fun stopScanning() {
+        if (isScanning) {
+            try {
+                bluetoothLeScanner?.stopScan(scanCallback)
+                isScanning = false
+                _isScanning.value = false
+                Log.i(TAG, "Stopped scanning")
+            } catch (e: SecurityException) {
+                Log.e(TAG, "❌ Security exception during stop scan: ${e.message}")
+            }
+        }
+    }
+    
+    @SuppressLint("MissingPermission")
+    private fun connectToDevice(device: BluetoothDevice) {
+        Log.i(TAG, "=== CONNECTING TO DEVICE ===")
+        Log.i(TAG, "Device: ${device.name} (${device.address})")
+        
+        try {
+            bluetoothGatt = device.connectGatt(context, false, gattCallback)
+            Log.i(TAG, "GATT connection initiated - waiting for callback...")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "❌ Security exception during connection: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Exception during connection: ${e.message}")
+        }
+    }
+    
+    @SuppressLint("MissingPermission")
+    fun sendNavigationData(navigationData: NavigationData) {
+        Log.i(TAG, "=== SENDING NAVIGATION DATA ===")
+        Log.i(TAG, "Data: $navigationData")
+        Log.i(TAG, "isConnected: $isConnected")
+        Log.i(TAG, "navigationCharacteristic: $navigationCharacteristic")
+        
+        if (!isConnected || navigationCharacteristic == null) {
+            Log.w(TAG, "Not ready to send - queuing message")
+            messageQueue.add(navigationData)
+            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+            return
+        }
+        
+        try {
+            // Format data as direction|distance|maneuver (matches ESP32 expectations)
+            val direction = when (navigationData.direction) {
+                Direction.LEFT -> "left"
+                Direction.RIGHT -> "right"
+                Direction.STRAIGHT -> "straight"
+                Direction.U_TURN -> "uturn"
+                else -> "straight"
+            }
+            
+            // Extract numeric distance value (convert to meters)
+            val distance = extractDistanceInMeters(navigationData.distance)
+            val maneuver = navigationData.maneuver ?: ""
+            
+            val dataString = "$direction|$distance|$maneuver"
+            val data = dataString.toByteArray()
+            
+            Log.i(TAG, "Sending data: '$dataString'")
+            Log.i(TAG, "Data bytes: ${data.contentToString()}")
+            Log.i(TAG, "Data length: ${data.size}")
+            
+            navigationCharacteristic?.value = data
+            val writeResult = bluetoothGatt?.writeCharacteristic(navigationCharacteristic)
+            Log.i(TAG, "Write result: $writeResult")
+            
+            if (writeResult == true) {
+                Log.i(TAG, "✅ Data sent successfully!")
+            } else {
+                Log.e(TAG, "❌ Failed to send data")
+                messageQueue.add(navigationData)
+                _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending data: ${e.message}")
+            messageQueue.add(navigationData)
+            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+        }
+    }
+    
+    private fun extractDistanceInMeters(distance: String?): Int {
+        if (distance.isNullOrBlank()) return 0
+        
+        val cleanDistance = distance.trim().lowercase()
+        
+        return when {
+            cleanDistance.endsWith("km") -> {
+                val value = cleanDistance.replace("km", "").trim().toFloatOrNull() ?: 0f
+                (value * 1000).toInt()
+            }
+            cleanDistance.endsWith("m") -> {
+                cleanDistance.replace("m", "").trim().toIntOrNull() ?: 0
+            }
+            else -> {
+                cleanDistance.toIntOrNull() ?: 0
+            }
+        }
+    }
+    
+    @SuppressLint("MissingPermission")
+    private fun processQueuedMessages() {
+        Log.i(TAG, "Processing ${messageQueue.size} queued messages...")
+        
+        while (messageQueue.isNotEmpty() && isConnected && navigationCharacteristic != null) {
+            val message = messageQueue.removeAt(0)
+            sendNavigationData(message)
+        }
+        
+        _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+    }
+    
+    @SuppressLint("MissingPermission")
+    fun disconnect() {
+        Log.i(TAG, "=== DISCONNECTING ===")
+        
+        if (bluetoothGatt != null) {
+            bluetoothGatt?.disconnect()
+            bluetoothGatt?.close()
+            bluetoothGatt = null
+        }
+        
+        isConnected = false
+        navigationCharacteristic = null
+        _connectionStatus.value = BLEConnectionStatus(
+            isConnected = false,
+            deviceName = null,
+            deviceAddress = null,
+            queuedMessages = messageQueue.size
+        )
+        Log.i(TAG, "Disconnected")
+    }
+    
+    fun cleanup() {
+        Log.i(TAG, "=== CLEANUP ===")
+        stopScanning()
+        disconnect()
+    }
+    
+    // Additional methods for compatibility with MainActivity
+    fun forceConnectionStatusUpdate() {
+        Log.i(TAG, "=== FORCING CONNECTION STATUS UPDATE ===")
+        Log.i(TAG, "Current isConnected: $isConnected")
+        Log.i(TAG, "Current bluetoothGatt: $bluetoothGatt")
+        Log.i(TAG, "Current navigationCharacteristic: $navigationCharacteristic")
+        
+        // Check actual BLE connection state
+        if (bluetoothGatt != null) {
+            val actualState = bluetoothGatt!!.getConnectionState(bluetoothAdapter?.getRemoteDevice(bluetoothGatt!!.device.address))
+            Log.i(TAG, "Actual BLE connection state: $actualState")
+            Log.i(TAG, "Is actually connected: ${actualState == BluetoothProfile.STATE_CONNECTED}")
+            
+            // Update isConnected based on actual state
+            val wasConnected = isConnected
+            isConnected = (actualState == BluetoothProfile.STATE_CONNECTED)
+            
+            Log.i(TAG, "Connection state changed: $wasConnected -> $isConnected")
+        }
+        
+        // Force update the connection status
+        _connectionStatus.value = BLEConnectionStatus(
+            isConnected = isConnected,
+            deviceName = bluetoothGatt?.device?.name ?: "ESP32_BLE",
+            deviceAddress = bluetoothGatt?.device?.address,
+            queuedMessages = messageQueue.size
+        )
+        
+        Log.i(TAG, "Updated connection status: ${_connectionStatus.value}")
+    }
+    
+    fun forceConnectionAttempt() {
+        Log.i(TAG, "=== FORCING CONNECTION ATTEMPT ===")
+        Log.i(TAG, "Current state: isConnected=$isConnected, bluetoothGatt=$bluetoothGatt")
+        
+        if (isConnected) {
+            Log.i(TAG, "Already connected, disconnecting first...")
+            disconnect()
+        }
+        
+        Log.i(TAG, "Starting fresh connection attempt...")
+        startScanning()
+    }
+    
+    fun forceProcessQueuedMessages() {
+        Log.i(TAG, "=== FORCING PROCESS QUEUED MESSAGES ===")
+        Log.i(TAG, "Queued messages: ${messageQueue.size}")
+        Log.i(TAG, "isConnected: $isConnected")
+        Log.i(TAG, "navigationCharacteristic: $navigationCharacteristic")
+        
+        if (messageQueue.isNotEmpty()) {
+            Log.i(TAG, "Processing ${messageQueue.size} queued messages...")
+            processQueuedMessages()
+        } else {
+            Log.i(TAG, "No queued messages to process")
+        }
+    }
+}
