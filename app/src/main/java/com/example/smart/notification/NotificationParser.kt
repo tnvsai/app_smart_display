@@ -2,6 +2,7 @@ package com.example.smart.notification
 
 import com.example.smart.model.Direction
 import com.example.smart.model.NavigationData
+import com.example.smart.utils.ETACalculator
 import android.util.Log
 import java.util.regex.Pattern
 
@@ -124,7 +125,8 @@ object NotificationParser {
             val navigationData = NavigationData(
                 direction = direction,
                 distance = distance,
-                maneuver = maneuver
+                maneuver = maneuver,
+                eta = ETACalculator.calculateETA(distance ?: "0m", direction)
             )
             Log.i(TAG, "Parsed navigation data: $navigationData")
             return navigationData

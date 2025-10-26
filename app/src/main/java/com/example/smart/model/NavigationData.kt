@@ -9,6 +9,7 @@ data class NavigationData(
     val distance: String? = null,
     val maneuver: String? = null,
     val icon: String? = null,  // Icon identifier for ESP32
+    val eta: String? = null,   // Estimated time of arrival
     val timestamp: Long = System.currentTimeMillis()
 )
 

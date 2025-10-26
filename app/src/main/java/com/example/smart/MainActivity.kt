@@ -47,6 +47,7 @@ import com.example.smart.notification.NotificationListenerService
 import com.example.smart.permission.PermissionHandler
 import com.example.smart.service.NavigationService
 import com.example.smart.ui.theme.SmartTheme
+import com.example.smart.utils.ETACalculator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -683,7 +684,8 @@ fun NavigationApp(
                                     val testData = NavigationData(
                                         direction = direction,
                                         distance = testDistance,
-                                        maneuver = testManeuver
+                                        maneuver = testManeuver,
+                                        eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
                                     bleService.sendNavigationData(testData)
                                     addDebugLog("Test: ${direction.name}")
@@ -709,7 +711,8 @@ fun NavigationApp(
                                     val testData = NavigationData(
                                         direction = direction,
                                         distance = testDistance,
-                                        maneuver = testManeuver
+                                        maneuver = testManeuver,
+                                        eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
                                     bleService.sendNavigationData(testData)
                                     addDebugLog("Test: ${direction.name}")
@@ -735,7 +738,8 @@ fun NavigationApp(
                                     val testData = NavigationData(
                                         direction = direction,
                                         distance = testDistance,
-                                        maneuver = testManeuver
+                                        maneuver = testManeuver,
+                                        eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
                                     bleService.sendNavigationData(testData)
                                     addDebugLog("Test: ${direction.name}")
@@ -765,7 +769,8 @@ fun NavigationApp(
                                     val testData = NavigationData(
                                         direction = direction,
                                         distance = testDistance,
-                                        maneuver = testManeuver
+                                        maneuver = testManeuver,
+                                        eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
                                     bleService.sendNavigationData(testData)
                                     addDebugLog("Test: ${direction.name}")
@@ -794,7 +799,8 @@ fun NavigationApp(
                                     val testData = NavigationData(
                                         direction = direction,
                                         distance = testDistance,
-                                        maneuver = testManeuver
+                                        maneuver = testManeuver,
+                                        eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
                                     bleService.sendNavigationData(testData)
                                     addDebugLog("Test: ${direction.name}")
@@ -814,7 +820,8 @@ fun NavigationApp(
                             val testData = NavigationData(
                                 direction = Direction.DESTINATION_REACHED,
                                 distance = "0m",
-                                maneuver = "You have arrived"
+                                maneuver = "You have arrived",
+                                eta = ETACalculator.calculateETA("0m", Direction.DESTINATION_REACHED)
                             )
                             bleService.sendNavigationData(testData)
                             addDebugLog("Test: DESTINATION_REACHED")
@@ -861,7 +868,8 @@ fun NavigationApp(
                                                 val testData = NavigationData(
                                                     direction = direction,
                                                     distance = testDistance,
-                                                    maneuver = testManeuver
+                                                    maneuver = testManeuver,
+                                                    eta = ETACalculator.calculateETA(testDistance, direction)
                                                 )
                                                 bleService.sendNavigationData(testData)
                                                 addDebugLog("Sequence: Testing ${direction.name}")
