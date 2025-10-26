@@ -392,13 +392,16 @@ class WorkingBLEService(private val context: Context) {
             }
             
             // Create JSON data
-            val jsonData = mapOf(
+            val jsonData = mutableMapOf(
                 "type" to navigationData.type.displayName,
                 "direction" to direction,
                 "distance" to distance,
                 "maneuver" to maneuver,
                 "icon" to icon
             )
+            
+            // Add ETA if available (remove speed)
+            navigationData.eta?.let { jsonData["eta"] = it }
             
             val dataString = gson.toJson(jsonData)
             val data = dataString.toByteArray()
