@@ -91,13 +91,13 @@ class NotificationListenerService : NotificationListenerService() {
     
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         super.onNotificationPosted(sbn)
-        
+
         val packageName = sbn.packageName
         val notification = sbn.notification
         val title = notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
         val text = notification.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
         val bigText = notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
-        
+
         // Log ALL notifications for debugging
         Log.i(TAG, "=== NOTIFICATION RECEIVED ===")
         Log.i(TAG, "Package: $packageName")
@@ -105,27 +105,35 @@ class NotificationListenerService : NotificationListenerService() {
         Log.i(TAG, "Text: $text")
         Log.i(TAG, "BigText: $bigText")
         Log.i(TAG, "BLE Service Available: ${bleService != null}")
-        
+
+        // Route notification based on package name
+        when (packageName) {
+            "com.google.android.apps.maps" -> handleGoogleMapsNotification(sbn, title, text, bigText)
+            "com.android.server.telecom", "com.android.dialer" -> handlePhoneNotification(sbn, title, text, bigText)
+            // Future: Music apps
+            else -> Log.d(TAG, "Notification from other app: $packageName")
+        }
+    }
+
+    private fun handleGoogleMapsNotification(sbn: StatusBarNotification, title: String?, text: String?, bigText: String?) {
         // Combine all text sources
         val fullText = buildString {
             title?.let { append("$it ") }
             text?.let { append("$it ") }
             bigText?.let { append("$it ") }
         }.trim()
-        
-        // Check if it's from Google Maps
-        val isGoogleMaps = NotificationParser.isGoogleMapsNotification(packageName, title)
+
         val isNavigation = NotificationParser.isNavigationNotification(fullText)
-        
+
         // Parse navigation data if it's a navigation notification
         var parsedData: String? = null
-        if (isGoogleMaps && isNavigation) {
+        if (isNavigation) {
             val navigationData = NotificationParser.parseNotification(fullText)
             parsedData = navigationData?.toString()
-            
+
             if (navigationData != null) {
                 Log.i(TAG, "✅ PARSED NAVIGATION DATA: $navigationData")
-                
+
                 // Send to BLE service
                 bleService?.let { service ->
                     Log.i(TAG, "Sending to BLE service...")
@@ -135,8 +143,28 @@ class NotificationListenerService : NotificationListenerService() {
                 } ?: Log.e(TAG, "❌ BLE SERVICE NOT AVAILABLE!")
             }
         }
+
+        // Store notification for debugging
+        storeNotificationForDebugging(sbn.packageName, title, text, bigText, true, isNavigation, parsedData)
+    }
+
+    private fun handlePhoneNotification(sbn: StatusBarNotification, title: String?, text: String?, bigText: String?) {
+        // Future implementation for phone call notifications
+        Log.d(TAG, "Phone notification received - future feature")
         
         // Store notification for debugging
+        storeNotificationForDebugging(sbn.packageName, title, text, bigText, false, false, null)
+    }
+
+    private fun storeNotificationForDebugging(
+        packageName: String,
+        title: String?,
+        text: String?,
+        bigText: String?,
+        isGoogleMaps: Boolean,
+        isNavigation: Boolean,
+        parsedData: String?
+    ) {
         val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         val notificationInfo = NotificationInfo(
             timestamp = timestamp,
@@ -148,13 +176,13 @@ class NotificationListenerService : NotificationListenerService() {
             isNavigation = isNavigation,
             parsedData = parsedData
         )
-        
+
         // Add to recent notifications list
         recentNotifications.add(0, notificationInfo) // Add to beginning
         if (recentNotifications.size > MAX_RECENT_NOTIFICATIONS) {
             recentNotifications.removeAt(recentNotifications.size - 1) // Remove oldest
         }
-        
+
         Log.i(TAG, "Stored notification for debugging. Total stored: ${recentNotifications.size}")
     }
     

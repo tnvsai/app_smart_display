@@ -23,6 +23,7 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import com.example.smart.model.Direction
 import com.example.smart.model.NavigationData
+import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,7 @@ class WorkingBLEService(private val context: Context) {
     
     private val messageQueue = mutableListOf<NavigationData>()
     private val handler = Handler(Looper.getMainLooper())
+    private val gson = Gson()
     
     // State flows for UI updates (compatible with existing MainActivity)
     private val _connectionStatus = MutableStateFlow(BLEConnectionStatus())
@@ -290,28 +292,63 @@ class WorkingBLEService(private val context: Context) {
         }
         
         try {
-            // Format data as direction|distance|maneuver (matches ESP32 expectations)
+            // Format data as JSON for flexibility
             val direction = when (navigationData.direction) {
                 Direction.LEFT -> "left"
                 Direction.RIGHT -> "right"
                 Direction.STRAIGHT -> "straight"
                 Direction.U_TURN -> "uturn"
+                Direction.SHARP_LEFT -> "sharp_left"
+                Direction.SHARP_RIGHT -> "sharp_right"
+                Direction.SLIGHT_LEFT -> "slight_left"
+                Direction.SLIGHT_RIGHT -> "slight_right"
+                Direction.ROUNDABOUT_LEFT -> "roundabout_left"
+                Direction.ROUNDABOUT_RIGHT -> "roundabout_right"
+                Direction.ROUNDABOUT_STRAIGHT -> "roundabout_straight"
+                Direction.MERGE_LEFT -> "merge_left"
+                Direction.MERGE_RIGHT -> "merge_right"
+                Direction.KEEP_LEFT -> "keep_left"
+                Direction.KEEP_RIGHT -> "keep_right"
+                Direction.DESTINATION_REACHED -> "destination"
+                Direction.WAYPOINT_REACHED -> "waypoint"
                 else -> "straight"
             }
             
             // Extract numeric distance value (convert to meters)
             val distance = extractDistanceInMeters(navigationData.distance)
             val maneuver = navigationData.maneuver ?: ""
+            val icon = when (navigationData.direction) {
+                Direction.LEFT -> "arrow_left"
+                Direction.RIGHT -> "arrow_right"
+                Direction.STRAIGHT -> "arrow_up"
+                Direction.U_TURN -> "arrow_uturn"
+                Direction.SHARP_LEFT -> "arrow_sharp_left"
+                Direction.SHARP_RIGHT -> "arrow_sharp_right"
+                Direction.SLIGHT_LEFT -> "arrow_slight_left"
+                Direction.SLIGHT_RIGHT -> "arrow_slight_right"
+                Direction.ROUNDABOUT_LEFT, Direction.ROUNDABOUT_RIGHT, Direction.ROUNDABOUT_STRAIGHT -> "roundabout"
+                Direction.MERGE_LEFT, Direction.MERGE_RIGHT -> "merge"
+                Direction.KEEP_LEFT, Direction.KEEP_RIGHT -> "lane"
+                Direction.DESTINATION_REACHED -> "destination_flag"
+                Direction.WAYPOINT_REACHED -> "waypoint"
+                else -> "arrow_up"
+            }
             
-            val dataString = "$direction|$distance|$maneuver"
+            // Create JSON data
+            val jsonData = mapOf(
+                "type" to navigationData.type.displayName,
+                "direction" to direction,
+                "distance" to distance,
+                "maneuver" to maneuver,
+                "icon" to icon
+            )
+            
+            val dataString = gson.toJson(jsonData)
             val data = dataString.toByteArray()
             
-            Log.i(TAG, "=== BLE DATA TRANSMISSION DEBUG ===")
+            Log.i(TAG, "=== BLE JSON DATA TRANSMISSION DEBUG ===")
             Log.i(TAG, "Original NavigationData: $navigationData")
-            Log.i(TAG, "Direction: '$direction'")
-            Log.i(TAG, "Distance: '$distance' (from '${navigationData.distance}')")
-            Log.i(TAG, "Maneuver: '$maneuver' (from '${navigationData.maneuver}')")
-            Log.i(TAG, "Final data string: '$dataString'")
+            Log.i(TAG, "JSON data: $dataString")
             Log.i(TAG, "Data bytes: ${data.contentToString()}")
             Log.i(TAG, "Data length: ${data.size}")
             

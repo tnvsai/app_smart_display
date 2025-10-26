@@ -48,17 +48,6 @@
             </intent-filter>
         </activity>
         
-        <activity
-            android:name=".TestActivity"
-            android:exported="true"
-            android:label="BLE Test"
-            android:theme="@style/Theme.Smart" />
-
-        <!-- BLE Service -->
-        <service
-            android:name=".ble.BLEService"
-            android:enabled="true"
-            android:exported="false" />
 
         <!-- Notification Listener Service -->
         <service

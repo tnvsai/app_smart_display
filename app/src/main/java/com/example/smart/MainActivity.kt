@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.smart.ble.WorkingBLEService
@@ -462,381 +463,7 @@ fun NavigationApp(
                 }
             }
             
-            // BLE Debug Window
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFF5F5F5)
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = "BLE Debug Information",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Connection Status
-                        Text(
-                            text = "Connection Status:",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "• App Status: ${if (connectionStatus.isConnected) "Connected" else "Disconnected"}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (connectionStatus.isConnected) Color.Green else Color.Red
-                        )
-                        Text(
-                            text = "• Internal Status: ${bleService.connectionStatus.value.isConnected}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (bleService.connectionStatus.value.isConnected) Color.Green else Color.Red
-                        )
-                        Text(
-                            text = "• Device: ${connectionStatus.deviceName ?: "None"}",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = "• Address: ${connectionStatus.deviceAddress ?: "None"}",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = "• Queued Messages: ${connectionStatus.queuedMessages}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (connectionStatus.queuedMessages > 0) Color(0xFFFFA500) else Color.Gray
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // BLE Services Information
-                        Text(
-                            text = "BLE Services:",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "• Target Service: 12345678-1234-1234-1234-1234567890ab",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
-                        Text(
-                            text = "• Target Characteristic: abcd1234-5678-90ab-cdef-1234567890ab",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
-                        Text(
-                            text = "• Expected Properties: NOTIFY, READ, WRITE",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // Data Format
-                        Text(
-                            text = "Data Format:",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "• Format: direction|distance|maneuver",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
-                        Text(
-                            text = "• Example: left|200|roundabout",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Action Buttons
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    addDebugLog("Refreshing BLE status...")
-                                    bleService.forceConnectionStatusUpdate()
-                                    addDebugLog("BLE status refreshed")
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color.Blue
-                                )
-                            ) {
-                                Text("Refresh Status")
-                            }
-                            
-                            Button(
-                                onClick = {
-                                    addDebugLog("Sending test data: left|200|debug_test")
-                                    val testData = com.example.smart.model.NavigationData(
-                                        direction = com.example.smart.model.Direction.LEFT,
-                                        distance = "200",
-                                        maneuver = "debug_test"
-                                    )
-                                    bleService.sendNavigationData(testData)
-                                    addDebugLog("Test data sent")
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color.Green
-                                )
-                            ) {
-                                Text("Send Test")
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // Process Queued Messages Button
-                        Button(
-                            onClick = {
-                                addDebugLog("Processing queued messages...")
-                                bleService.forceProcessQueuedMessages()
-                                addDebugLog("Queued messages processed")
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFFA500)
-                            )
-                        ) {
-                            Text("Process Queued Messages (${connectionStatus.queuedMessages})")
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // Force Connection Button
-                        Button(
-                            onClick = {
-                                addDebugLog("Forcing connection attempt...")
-                                bleService.forceConnectionAttempt()
-                                addDebugLog("Connection attempt initiated")
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Red
-                            )
-                        ) {
-                            Text("Force Connection Attempt")
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // Notification Service Debug
-                        Text(
-                            text = "Notification Service Debug:",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    val notificationService = NotificationListenerService.getInstance()
-                                    if (notificationService != null) {
-                                        addDebugLog("Notification Service Status:")
-                                        addDebugLog("Service Running: true")
-                                        addDebugLog("Notification Access: ${NotificationListenerService.hasNotificationAccess()}")
-                                        addDebugLog("BLE Service Set: ${NotificationListenerService.bleService != null}")
-                                        addDebugLog("Active Notifications: ${NotificationListenerService.getAllActiveNotifications().size}")
-                                    } else {
-                                        addDebugLog("❌ NotificationListenerService is not running!")
-                                        addDebugLog("Enable notification access in Android Settings")
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color.Magenta
-                                )
-                            ) {
-                                Text("Check Notification Service")
-                            }
-                            
-                            Button(
-                                onClick = {
-                                    addDebugLog("Testing notification parsing...")
-                                    val testNotification = "Turn left in 200 meters onto Main Street"
-                                    val parsed = com.example.smart.notification.NotificationParser.parseNotification(testNotification)
-                                    addDebugLog("Test notification: '$testNotification'")
-                                    addDebugLog("Parsed result: $parsed")
-                                    
-                                    // Also test with maneuver
-                                    val testWithManeuver = "Take exit 5 in 1.2 km onto Highway 101"
-                                    val parsedManeuver = com.example.smart.notification.NotificationParser.parseNotification(testWithManeuver)
-                                    addDebugLog("Test with maneuver: '$testWithManeuver'")
-                                    addDebugLog("Parsed with maneuver: $parsedManeuver")
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color.Cyan
-                                )
-                            ) {
-                                Text("Test Parser")
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // Notification Display Buttons
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    val notifications = com.example.smart.notification.NotificationListenerService.getRecentNotifications()
-                                    addDebugLog("=== RECENT NOTIFICATIONS (${notifications.size}) ===")
-                                    if (notifications.isEmpty()) {
-                                        addDebugLog("No notifications captured yet.")
-                                        addDebugLog("Make sure notification access is enabled.")
-                                    } else {
-                                        notifications.forEachIndexed { index, notif ->
-                                            addDebugLog("--- Notification ${index + 1} ---")
-                                            addDebugLog("Time: ${notif.timestamp}")
-                                            addDebugLog("Package: ${notif.packageName}")
-                                            addDebugLog("Title: ${notif.title ?: "None"}")
-                                            addDebugLog("Text: ${notif.text ?: "None"}")
-                                            addDebugLog("BigText: ${notif.bigText ?: "None"}")
-                                            addDebugLog("Is Google Maps: ${notif.isGoogleMaps}")
-                                            addDebugLog("Is Navigation: ${notif.isNavigation}")
-                                            addDebugLog("Parsed Data: ${notif.parsedData ?: "None"}")
-                                            addDebugLog("")
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color.Green
-                                )
-                            ) {
-                                Text("Show Notifications")
-                            }
-                            
-                            Button(
-                                onClick = {
-                                    com.example.smart.notification.NotificationListenerService.clearRecentNotifications()
-                                    addDebugLog("Cleared recent notifications")
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color.Red
-                                )
-                            ) {
-                                Text("Clear Notifications")
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // Debug Log Toggle
-                        Button(
-                            onClick = { showDebugLogs = !showDebugLogs },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (showDebugLogs) Color.Gray else Color.LightGray
-                            )
-                        ) {
-                            Text(if (showDebugLogs) "Hide Debug Logs" else "Show Debug Logs")
-                        }
-                        
-                        // Debug Logs Display
-                        if (showDebugLogs) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = Color.Black
-                                )
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(8.dp)
-                                ) {
-                                    Text(
-                                        text = "Debug Logs:",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    
-                                    if (debugLogs.isEmpty()) {
-                                        Text(
-                                            text = "No debug logs yet. Try sending data or refreshing status.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray
-                                        )
-                                    } else {
-                                        debugLogs.forEach { log ->
-                                            Text(
-                                                text = log,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = Color.Green,
-                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-                        // Test Activity Button
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFE3F2FD)
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = "BLE Testing",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Text(
-                            text = "Use the test interface to verify BLE communication",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.Gray
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        Button(
-                            onClick = {
-                                val intent = Intent(activity, TestActivity::class.java)
-                                activity.startActivity(intent)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Blue
-                            )
-                        ) {
-                            Text("Open BLE Test Interface")
-                        }
-                    }
-                }
-            }
-            
-            // Service Control Card
+            // Debug Logs Section
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth()
@@ -844,32 +471,72 @@ fun NavigationApp(
                     Column(
                         modifier = Modifier.padding(16.dp)
                     ) {
-                        Text(
-                            text = "Service Control",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Text(
+                                text = "Debug Logs",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
                             Button(
-                                onClick = onStartService,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Start Service")
-                            }
-                            
-                            Button(
-                                onClick = onStopService,
-                                modifier = Modifier.weight(1f),
+                                onClick = { 
+                                    debugLogs = emptyList()
+                                },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error
+                                    containerColor = Color.Red
                                 )
                             ) {
-                                Text("Stop Service")
+                                Text("Clear Logs")
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // Connection Status Summary
+                        Text(
+                            text = "Status: ${if (connectionStatus.isConnected) "Connected" else "Disconnected"} | Queued: ${connectionStatus.queuedMessages}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (connectionStatus.isConnected) Color.Green else Color.Red
+                        )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // Scrollable Debug Log
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color.Black
+                            )
+                        ) {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(200.dp)
+                                    .padding(8.dp),
+                                reverseLayout = true  // Show newest at bottom
+                            ) {
+                                if (debugLogs.isEmpty()) {
+                                    item {
+                                        Text(
+                                            text = "No debug logs yet. Try sending data or starting navigation.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                } else {
+                                    items(debugLogs) { log ->
+                                        Text(
+                                            text = log,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Green,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                            modifier = Modifier.padding(vertical = 1.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
