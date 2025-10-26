@@ -42,8 +42,16 @@ class NotificationListenerService : NotificationListenerService() {
         private val recentNotifications = mutableListOf<NotificationInfo>()
         private const val MAX_RECENT_NOTIFICATIONS = 20
         
-        fun setBLEService(bleService: WorkingBLEService) {
+        // Debug log callback
+        var debugLogCallback: ((String) -> Unit)? = null
+            private set
+        
+        fun setBLEService(bleService: WorkingBLEService?) {
             this.bleService = bleService
+        }
+        
+        fun setDebugLogCallback(callback: (String) -> Unit) {
+            debugLogCallback = callback
         }
         
         fun getInstance(): NotificationListenerService? = instance
@@ -133,6 +141,9 @@ class NotificationListenerService : NotificationListenerService() {
 
             if (navigationData != null) {
                 Log.i(TAG, "✅ PARSED NAVIGATION DATA: $navigationData")
+                
+                // Send to debug log
+                debugLogCallback?.invoke("Google Maps: ${navigationData.direction?.name} - ${navigationData.distance}")
 
                 // Send to BLE service
                 bleService?.let { service ->

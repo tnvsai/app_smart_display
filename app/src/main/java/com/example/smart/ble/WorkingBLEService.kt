@@ -30,6 +30,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -66,11 +69,46 @@ class WorkingBLEService(private val context: Context) {
     private val _isScanning = MutableStateFlow(false)
     val isScanningState: StateFlow<Boolean> = _isScanning.asStateFlow()
     
+    // Transmission logging
+    private val _transmissionLog = MutableStateFlow<List<String>>(emptyList())
+    val transmissionLog: StateFlow<List<String>> = _transmissionLog.asStateFlow()
+    
+    // Statistics tracking
+    private var totalMessagesSent = 0
+    private var sessionMessagesSent = 0
+    private var lastMessageTimestamp: Long? = null
+    private var messagesSentSuccess = 0
+    private var messagesSentFailed = 0
+    
+    private val _transmissionStats = MutableStateFlow(TransmissionStats())
+    val transmissionStats: StateFlow<TransmissionStats> = _transmissionStats.asStateFlow()
+    
+    // Connection history
+    private val _connectionHistory = MutableStateFlow<List<ConnectionHistoryEntry>>(emptyList())
+    val connectionHistory: StateFlow<List<ConnectionHistoryEntry>> = _connectionHistory.asStateFlow()
+    
+    private var currentConnectionStart: Long? = null
+    
     data class BLEConnectionStatus(
         val isConnected: Boolean = false,
         val deviceName: String? = null,
         val deviceAddress: String? = null,
         val queuedMessages: Int = 0
+    )
+    
+    data class TransmissionStats(
+        val totalSent: Int = 0,
+        val sessionSent: Int = 0,
+        val successRate: Float = 0f,
+        val lastMessageTime: String? = null
+    )
+    
+    data class ConnectionHistoryEntry(
+        val deviceName: String,
+        val deviceAddress: String,
+        val connectedAt: Long,
+        val disconnectedAt: Long? = null,
+        val duration: Long? = null
     )
     
     private val scanCallback = object : ScanCallback() {
@@ -110,12 +148,18 @@ class WorkingBLEService(private val context: Context) {
                         isConnected = true
                         bluetoothGatt = gatt
                         
+                        val deviceName = gatt.device.name ?: "ESP32_BLE"
+                        val deviceAddress = gatt.device.address
+                        
                         _connectionStatus.value = BLEConnectionStatus(
                             isConnected = true,
-                            deviceName = gatt.device.name ?: "ESP32_BLE",
-                            deviceAddress = gatt.device.address,
+                            deviceName = deviceName,
+                            deviceAddress = deviceAddress,
                             queuedMessages = messageQueue.size
                         )
+                        
+                        // Add to connection history
+                        addConnectionHistory(deviceName, deviceAddress, true)
                         
                         Log.i(TAG, "Starting service discovery...")
                         val discoveryStarted = gatt.discoverServices()
@@ -128,6 +172,12 @@ class WorkingBLEService(private val context: Context) {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i(TAG, "❌ GATT DISCONNECTED")
+                    
+                    // Add to connection history before clearing
+                    val deviceName = gatt.device.name ?: "ESP32_BLE"
+                    val deviceAddress = gatt.device.address
+                    addConnectionHistory(deviceName, deviceAddress, false)
+                    
                     isConnected = false
                     bluetoothGatt = null
                     navigationCharacteristic = null
@@ -279,6 +329,12 @@ class WorkingBLEService(private val context: Context) {
     
     @SuppressLint("MissingPermission")
     fun sendNavigationData(navigationData: NavigationData) {
+        // Add transmission log
+        val timestamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
+        val logMessage = "[$timestamp] TX: dir=${navigationData.direction?.name}, dist=${navigationData.distance}, man=${navigationData.maneuver}"
+        Log.i(TAG, logMessage)
+        _transmissionLog.value = (_transmissionLog.value + logMessage).takeLast(50)
+        
         Log.i(TAG, "=== SENDING NAVIGATION DATA ===")
         Log.i(TAG, "Data: $navigationData")
         Log.i(TAG, "isConnected: $isConnected")
@@ -288,6 +344,7 @@ class WorkingBLEService(private val context: Context) {
             Log.w(TAG, "Not ready to send - queuing message")
             messageQueue.add(navigationData)
             _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+            updateStats(false)
             return
         }
         
@@ -358,15 +415,52 @@ class WorkingBLEService(private val context: Context) {
             
             if (writeResult == true) {
                 Log.i(TAG, "✅ Data sent successfully!")
+                updateStats(true)
             } else {
                 Log.e(TAG, "❌ Failed to send data")
                 messageQueue.add(navigationData)
                 _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+                updateStats(false)
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error sending data: ${e.message}")
             messageQueue.add(navigationData)
             _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+            updateStats(false)
+        }
+    }
+    
+    private fun updateStats(success: Boolean) {
+        totalMessagesSent++
+        sessionMessagesSent++
+        if (success) messagesSentSuccess++ else messagesSentFailed++
+        lastMessageTimestamp = System.currentTimeMillis()
+        
+        _transmissionStats.value = TransmissionStats(
+            totalSent = totalMessagesSent,
+            sessionSent = sessionMessagesSent,
+            successRate = if (totalMessagesSent > 0) (messagesSentSuccess.toFloat() / totalMessagesSent * 100) else 0f,
+            lastMessageTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastMessageTimestamp!!))
+        )
+    }
+    
+    fun resetSessionStats() {
+        sessionMessagesSent = 0
+    }
+    
+    fun addConnectionHistory(deviceName: String, deviceAddress: String, connected: Boolean) {
+        if (connected) {
+            currentConnectionStart = System.currentTimeMillis()
+        } else if (currentConnectionStart != null) {
+            val entry = ConnectionHistoryEntry(
+                deviceName = deviceName,
+                deviceAddress = deviceAddress,
+                connectedAt = currentConnectionStart!!,
+                disconnectedAt = System.currentTimeMillis(),
+                duration = System.currentTimeMillis() - currentConnectionStart!!
+            )
+            _connectionHistory.value = (_connectionHistory.value + entry).takeLast(10)
+            currentConnectionStart = null
         }
     }
     

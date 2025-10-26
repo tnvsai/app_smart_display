@@ -26,6 +26,8 @@ class NavigationService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "navigation_service_channel"
         private const val CHANNEL_NAME = "Navigation Service"
+        const val ACTION_STOP_SERVICE = "com.example.smart.STOP_SERVICE"
+        const val ACTION_DISCONNECT_BLE = "com.example.smart.DISCONNECT_BLE"
         
         fun startService(context: Context) {
             val intent = Intent(context, NavigationService::class.java)
@@ -60,6 +62,20 @@ class NavigationService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP_SERVICE -> {
+                Log.i(TAG, "Stop action received from notification")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_DISCONNECT_BLE -> {
+                Log.i(TAG, "Disconnect BLE action received from notification")
+                bleService?.disconnect()
+                updateNotification("BLE Disconnected")
+                return START_STICKY
+            }
+        }
+        
         Log.i(TAG, "NavigationService started")
         
         // Start BLE scanning
@@ -117,6 +133,28 @@ class NavigationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
+        // Stop Service Action
+        val stopIntent = Intent(this, NavigationService::class.java).apply {
+            action = ACTION_STOP_SERVICE
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        // Disconnect BLE Action
+        val disconnectIntent = Intent(this, NavigationService::class.java).apply {
+            action = ACTION_DISCONNECT_BLE
+        }
+        val disconnectPendingIntent = PendingIntent.getService(
+            this,
+            2,
+            disconnectIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Navigation Monitor")
             .setContentText(contentText)
@@ -125,6 +163,8 @@ class NavigationService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .addAction(R.drawable.ic_launcher_foreground, "Stop", stopPendingIntent)
+            .addAction(R.drawable.ic_launcher_foreground, "Disconnect", disconnectPendingIntent)
             .build()
     }
     
