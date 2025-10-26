@@ -23,6 +23,8 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import com.example.smart.model.Direction
 import com.example.smart.model.NavigationData
+import com.example.smart.model.PhoneCallData
+import com.example.smart.model.CallState
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +61,7 @@ class WorkingBLEService(private val context: Context) {
     private var isConnected = false
     
     private val messageQueue = mutableListOf<NavigationData>()
+    private val phoneCallQueue = mutableListOf<PhoneCallData>()
     private val handler = Handler(Looper.getMainLooper())
     private val gson = Gson()
     
@@ -433,6 +436,57 @@ class WorkingBLEService(private val context: Context) {
         }
     }
     
+    /**
+     * Send phone call data to ESP32
+     */
+    fun sendPhoneCallData(phoneCallData: PhoneCallData) {
+        if (!isConnected) {
+            Log.w(TAG, "Not connected, queuing phone call data")
+            phoneCallQueue.add(phoneCallData)
+            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
+            return
+        }
+        
+        try {
+            // Create JSON data for phone call
+            val jsonData = mutableMapOf(
+                "type" to "phone_call",
+                "caller_name" to (phoneCallData.callerName ?: ""),
+                "caller_number" to phoneCallData.callerNumber,
+                "call_state" to phoneCallData.callState.displayName,
+                "duration" to phoneCallData.duration
+            )
+            
+            val dataString = gson.toJson(jsonData)
+            val data = dataString.toByteArray()
+            
+            Log.i(TAG, "=== BLE PHONE CALL DATA TRANSMISSION DEBUG ===")
+            Log.i(TAG, "Original PhoneCallData: $phoneCallData")
+            Log.i(TAG, "JSON data: $dataString")
+            Log.i(TAG, "Data bytes: ${data.contentToString()}")
+            Log.i(TAG, "Data length: ${data.size}")
+            
+            navigationCharacteristic?.value = data
+            val writeResult = bluetoothGatt?.writeCharacteristic(navigationCharacteristic)
+            Log.i(TAG, "Write result: $writeResult")
+            
+            if (writeResult == true) {
+                Log.i(TAG, "✅ Phone call data sent successfully!")
+                updateStats(true)
+            } else {
+                Log.e(TAG, "❌ Failed to send phone call data")
+                phoneCallQueue.add(phoneCallData)
+                _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
+                updateStats(false)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending phone call data: ${e.message}")
+            phoneCallQueue.add(phoneCallData)
+            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
+            updateStats(false)
+        }
+    }
+    
     private fun updateStats(success: Boolean) {
         totalMessagesSent++
         sessionMessagesSent++
@@ -488,14 +542,21 @@ class WorkingBLEService(private val context: Context) {
     
     @SuppressLint("MissingPermission")
     private fun processQueuedMessages() {
-        Log.i(TAG, "Processing ${messageQueue.size} queued messages...")
+        Log.i(TAG, "Processing ${messageQueue.size} queued navigation messages and ${phoneCallQueue.size} queued phone call messages...")
         
+        // Process navigation messages
         while (messageQueue.isNotEmpty() && isConnected && navigationCharacteristic != null) {
             val message = messageQueue.removeAt(0)
             sendNavigationData(message)
         }
         
-        _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
+        // Process phone call messages
+        while (phoneCallQueue.isNotEmpty() && isConnected && navigationCharacteristic != null) {
+            val phoneCall = phoneCallQueue.removeAt(0)
+            sendPhoneCallData(phoneCall)
+        }
+        
+        _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
     }
     
     @SuppressLint("MissingPermission")
@@ -514,7 +575,7 @@ class WorkingBLEService(private val context: Context) {
             isConnected = false,
             deviceName = null,
             deviceAddress = null,
-            queuedMessages = messageQueue.size
+            queuedMessages = messageQueue.size + phoneCallQueue.size
         )
         Log.i(TAG, "Disconnected")
     }

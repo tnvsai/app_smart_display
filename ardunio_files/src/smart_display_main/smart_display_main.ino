@@ -4,6 +4,22 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <ArduinoJson.h>
+#include <Wire.h>
+#include "esp_lcd_touch_axs5106l.h"
+
+// Touch variables
+bool touchEnabled = true;
+int touchX = 0;
+int touchY = 0;
+unsigned long lastTouchTime = 0;
+
+// Touch functions are provided by the library
+
+// Touch configuration (matching the working example)
+#define Touch_I2C_SDA 18  // I2C SDA pin for touch
+#define Touch_I2C_SCL 19  // I2C SCL pin for touch
+#define Touch_RST     20  // Touch reset pin
+#define Touch_INT     21  // Touch interrupt pin
 
 // ==== BLE Configuration ====
 #define SERVICE_UUID "12345678-1234-1234-1234-1234567890ab"
@@ -23,11 +39,11 @@ Arduino_GFX *gfx = new Arduino_ST7789(bus, 22 /* RST */, 0, false, 172, 320, 34,
 #define ZONE_SPEED_Y 30
 #define ZONE_SPEED_H 30
 #define ZONE_ARROW_Y 60
-#define ZONE_ARROW_H 160
-#define ZONE_DISTANCE_Y 220
+#define ZONE_ARROW_H 100      // Made arrow zone much smaller
+#define ZONE_DISTANCE_Y 160    // Moved up significantly to reduce gap
 #define ZONE_DISTANCE_H 50
-#define ZONE_MANEUVER_Y 270
-#define ZONE_MANEUVER_H 40
+#define ZONE_MANEUVER_Y 210    // Moved up significantly to reduce gap
+#define ZONE_MANEUVER_H 50     // Increased from 40 for longer text
 #define SCREEN_WIDTH 172
 #define SCREEN_HEIGHT 320
 
@@ -42,11 +58,36 @@ Arduino_GFX *gfx = new Arduino_ST7789(bus, 22 /* RST */, 0, false, 172, 320, 34,
 #define COLOR_BLACK 0x0000      // Background
 #define COLOR_GRAY 0x8410       // Inactive elements
 
+// ==== DEBUG FLAGS ====
+#define DEBUG_BLE true
+#define DEBUG_TOUCH true
+#define DEBUG_CALLS true
+#define DEBUG_NAVIGATION true
+
 // ==== Global State ====
 String currentETA = "";
 String currentManeuver = "";
+String currentDirection = "";
+int currentDistance = 0;
 int scrollOffset = 0;
 unsigned long lastScrollTime = 0;
+
+// Phone call state
+bool isPhoneCallActive = false;
+bool isMissedCallShowing = false;
+int missedCallCount = 0;
+String currentCallerName = "";
+String currentCallerNumber = "";
+unsigned long callStartTime = 0;
+unsigned long missedCallTime = 0;
+String currentCallState = "";
+
+// Navigation state before phone call
+bool wasNavigationActive = false;
+String savedDirection = "";
+int savedDistance = 0;
+String savedManeuver = "";
+String savedETA = "";
 
 // ==== LCD Register Init ====
 void lcd_reg_init(void) {
@@ -109,19 +150,19 @@ void drawRightArrow(int x, int y) {
     gfx->fillTriangle(x+60, y, x+40, y-15, x+40, y+15, COLOR_GREEN); // Green arrow head
 }
 
-// STRAIGHT arrow - Pointing UP (Enhanced)
+// STRAIGHT arrow - Pointing UP (Enhanced, but shorter to avoid ETA overlap)
 void drawStraightArrow(int x, int y) {
     // Draw white outline first
     for (int offset = -4; offset <= 4; offset++) {
-        gfx->drawLine(x+offset, y, x+offset, y-42, COLOR_WHITE); // White outline
+        gfx->drawLine(x+offset, y, x+offset, y-30, COLOR_WHITE); // White outline (shorter)
     }
-    gfx->fillTriangle(x, y-63, x-17, y-42, x+17, y-42, COLOR_WHITE); // White outline
+    gfx->fillTriangle(x, y-50, x-17, y-30, x+17, y-30, COLOR_WHITE); // White outline
     
     // Draw colored arrow on top
     for (int offset = -3; offset <= 3; offset++) {
-        gfx->drawLine(x+offset, y, x+offset, y-40, COLOR_GREEN); // Green shaft (thicker)
+        gfx->drawLine(x+offset, y, x+offset, y-28, COLOR_GREEN); // Green shaft (thicker, but shorter)
     }
-    gfx->fillTriangle(x, y-60, x-15, y-40, x+15, y-40, COLOR_GREEN); // Green arrow head
+    gfx->fillTriangle(x, y-48, x-15, y-28, x+15, y-28, COLOR_GREEN); // Green arrow head
 }
 
 // SHARP LEFT - Orange diagonal (Enhanced)
@@ -268,22 +309,6 @@ void drawDestination(int x, int y) {
     gfx->fillTriangle(x+1, y-26, x+1, y-5, x+26, y-15, COLOR_RED); // Red flag
 }
 
-// MERGE LEFT - Yellow curved (Enhanced)
-void drawMergeLeft(int x, int y) {
-    // Enhanced merge curve from left
-    for (int i = 0; i < 7; i++) {
-        gfx->drawLine(x-42+i, y-14, x-21, y+7, COLOR_YELLOW); // Yellow merge lines
-    }
-}
-
-// MERGE RIGHT - Yellow curved (Enhanced)
-void drawMergeRight(int x, int y) {
-    // Enhanced merge curve from right
-    for (int i = 0; i < 7; i++) {
-        gfx->drawLine(x+42-i, y-14, x+21, y+7, COLOR_YELLOW); // Yellow merge lines
-    }
-}
-
 // KEEP LEFT/RIGHT - Vertical lines (Enhanced)
 void drawKeepLeft(int x, int y) {
     gfx->fillRect(x-35, y-42, 5, 84, COLOR_CYAN); // Cyan bar (thicker)
@@ -295,6 +320,10 @@ void drawKeepRight(int x, int y) {
 
 // MAIN ARROW FUNCTION
 void drawArrow(String dir) {
+    if (DEBUG_NAVIGATION) {
+        Serial.printf("[NAV] Drawing arrow: %s at zone (Y:%d, H:%d)\n", dir.c_str(), ZONE_ARROW_Y, ZONE_ARROW_H);
+    }
+    
     gfx->fillRect(0, ZONE_ARROW_Y, SCREEN_WIDTH, ZONE_ARROW_H, COLOR_BLACK); // Black background
     int midX = SCREEN_WIDTH / 2;
     int midY = ZONE_ARROW_Y + ZONE_ARROW_H / 2; // Center of expanded arrow area
@@ -315,10 +344,6 @@ void drawArrow(String dir) {
         drawDestination(midX, midY);
     } else if (dir.indexOf("roundabout") >= 0) {
         drawRoundabout(midX, midY, dir);
-    } else if (dir == "merge_left" || dir == "merge_slight_left") {
-        drawMergeLeft(midX, midY);
-    } else if (dir == "merge_right" || dir == "merge_slight_right") {
-        drawMergeRight(midX, midY);
     } else if (dir == "keep_left") {
         drawKeepLeft(midX, midY);
     } else if (dir == "keep_right") {
@@ -416,24 +441,292 @@ void displayETA(String eta) {
 }
 
 // MANEUVER
-void displayManeuver(String text) {
+void displayManeuver(String text, bool immediateRender = false) {
     currentManeuver = text;
     gfx->fillRect(0, ZONE_MANEUVER_Y, SCREEN_WIDTH, ZONE_MANEUVER_H, COLOR_BLACK);
     
-    // Update scrolling
-    unsigned long currentTime = millis();
-    if (currentTime - lastScrollTime > 100) { // Scroll every 100ms
-        scrollOffset++;
-        if (scrollOffset > text.length() * 6) { // Approximate character width
-            scrollOffset = -SCREEN_WIDTH;
-        }
-        lastScrollTime = currentTime;
+    // Reset scroll offset when text changes or when called with immediateRender
+    static String lastText = "";
+    if (lastText != text || immediateRender) {
+        scrollOffset = 0;
+        lastText = text;
     }
     
-    gfx->setCursor(10 + scrollOffset, ZONE_MANEUVER_Y + 12);
+    // Only update scrolling if not immediately rendering
+    if (!immediateRender) {
+        unsigned long currentTime = millis();
+        if (currentTime - lastScrollTime > 100) { // Scroll every 100ms
+            scrollOffset++;
+            if (scrollOffset > text.length() * 6) { // Approximate character width
+                scrollOffset = -SCREEN_WIDTH;
+            }
+            lastScrollTime = currentTime;
+        }
+    }
+    
+    // Adjusted cursor position for better text visibility
+    gfx->setCursor(10 + scrollOffset, ZONE_MANEUVER_Y + 15);
     gfx->setTextColor(COLOR_YELLOW);
-    gfx->setTextSize(2);
+    gfx->setTextSize(2);  // Keep readable size
     gfx->println(text);
+}
+
+// PHONE CALL DISPLAY FUNCTIONS
+void displayIncomingCall(String name, String number) {
+    // Save navigation state before showing call
+    if (!isPhoneCallActive && !isMissedCallShowing) {
+        wasNavigationActive = true;
+        savedDirection = currentDirection;
+        savedDistance = currentDistance;
+        savedManeuver = currentManeuver;
+        savedETA = currentETA;
+        
+        if (DEBUG_CALLS) {
+            Serial.printf("[CALL] Saving navigation state: dir=%s, dist=%d\n", 
+                          savedDirection.c_str(), savedDistance);
+        }
+    }
+    
+    isPhoneCallActive = true;
+    currentCallerName = name;
+    currentCallerNumber = number;
+    currentCallState = "INCOMING";
+    callStartTime = millis();
+    
+    // Clear screen
+    gfx->fillScreen(COLOR_BLACK);
+    
+    // Header
+    gfx->setCursor(10, 20);
+    gfx->setTextColor(COLOR_GREEN);
+    gfx->setTextSize(1);
+    gfx->print("📞 INCOMING CALL");
+    
+    // Caller name (large)
+    gfx->setCursor(10, 80);
+    gfx->setTextColor(COLOR_WHITE);
+    gfx->setTextSize(2);
+    gfx->print(name);
+    
+    // Phone number (medium)
+    gfx->setCursor(10, 120);
+    gfx->setTextColor(COLOR_GRAY);
+    gfx->setTextSize(1);
+    gfx->print(number);
+    
+    // Ringing animation dots
+    drawRingingAnimation();
+    
+    // Dismiss instruction
+    gfx->setCursor(10, 280);
+    gfx->setTextColor(COLOR_YELLOW);
+    gfx->setTextSize(1);
+    gfx->print("[TAP TO REJECT CALL]");
+}
+
+void displayOngoingCall(String name, int duration) {
+    isPhoneCallActive = true;
+    currentCallerName = name;
+    currentCallState = "ONGOING";
+    
+    // Clear screen
+    gfx->fillScreen(COLOR_BLACK);
+    
+    // Header
+    gfx->setCursor(10, 20);
+    gfx->setTextColor(COLOR_CYAN);
+    gfx->setTextSize(1);
+    gfx->print("📱 IN CALL");
+    
+    // Caller name
+    gfx->setCursor(10, 100);
+    gfx->setTextColor(COLOR_WHITE);
+    gfx->setTextSize(2);
+    gfx->print(name);
+    
+    // Call duration
+    gfx->setCursor(10, 150);
+    gfx->setTextColor(COLOR_GRAY);
+    gfx->setTextSize(2);
+    gfx->print("⏱ ");
+    gfx->printf("%02d:%02d", duration / 60, duration % 60);
+    
+    // Dismiss instruction
+    gfx->setCursor(10, 280);
+    gfx->setTextColor(COLOR_YELLOW);
+    gfx->setTextSize(1);
+    gfx->print("[TAP TO DISMISS]");
+}
+
+void displayMissedCall(String name, String number, int count) {
+    // Save navigation state before showing missed call (if not already saved)
+    if (!isPhoneCallActive && !isMissedCallShowing && !wasNavigationActive) {
+        wasNavigationActive = true;
+        savedDirection = currentDirection;
+        savedDistance = currentDistance;
+        savedManeuver = currentManeuver;
+        savedETA = currentETA;
+        
+        if (DEBUG_CALLS) {
+            Serial.printf("[CALL] Saving navigation state for missed call: dir=%s, dist=%d\n", 
+                          savedDirection.c_str(), savedDistance);
+        }
+    }
+    
+    isMissedCallShowing = true;
+    missedCallCount = count;
+    currentCallerName = name;
+    currentCallerNumber = number;
+    currentCallState = "MISSED";
+    missedCallTime = millis();
+    
+    // Clear screen
+    gfx->fillScreen(COLOR_BLACK);
+    
+    // Header with count
+    gfx->setCursor(10, 20);
+    gfx->setTextColor(COLOR_RED);
+    gfx->setTextSize(1);
+    if (count > 1) {
+        gfx->printf("❌ MISSED CALL (%d)", count);
+    } else {
+        gfx->print("❌ MISSED CALL");
+    }
+    
+    // Caller name
+    gfx->setCursor(10, 100);
+    gfx->setTextColor(COLOR_WHITE);
+    gfx->setTextSize(2);
+    gfx->print(name);
+    
+    // Phone number
+    gfx->setCursor(10, 140);
+    gfx->setTextColor(COLOR_GRAY);
+    gfx->setTextSize(1);
+    gfx->print(number);
+    
+    // Time since call
+    gfx->setCursor(10, 180);
+    gfx->setTextColor(COLOR_GRAY);
+    gfx->setTextSize(1);
+    gfx->print("Just now");
+    
+    // Dismiss instruction
+    gfx->setCursor(10, 280);
+    gfx->setTextColor(COLOR_YELLOW);
+    gfx->setTextSize(1);
+    gfx->print("[TAP TO DISMISS]");
+}
+
+void clearPhoneDisplay() {
+    isPhoneCallActive = false;
+    isMissedCallShowing = false;
+    currentCallerName = "";
+    currentCallerNumber = "";
+    currentCallState = "";
+    
+    if (DEBUG_CALLS) {
+        Serial.println("[CALL] Phone call dismissed - restoring navigation");
+    }
+    
+    // Reset scroll offset for clean display
+    scrollOffset = 0;
+    
+    // Restore navigation from saved state
+    if (wasNavigationActive) {
+        // Restore saved navigation data
+        currentDirection = savedDirection;
+        currentDistance = savedDistance;
+        currentManeuver = savedManeuver;
+        currentETA = savedETA;
+        
+        if (DEBUG_CALLS) {
+            Serial.printf("[CALL] Restoring from saved state - dir:%s, dist:%d, man:%s, eta:%s\n", 
+                          savedDirection.c_str(), savedDistance, savedManeuver.c_str(), savedETA.c_str());
+        }
+        
+        // Clear screen first
+        gfx->fillScreen(COLOR_BLACK);
+        
+        // Restore all navigation elements in optimal order
+        displayStatus("CONNECTED", COLOR_GREEN);
+        
+        // ETA first
+        if (savedETA.length() > 0) {
+            displayETA(savedETA);
+        }
+        
+        // Maneuver text second (draw BEFORE arrow, immediate render to avoid delay)
+        if (savedManeuver.length() > 0) {
+            displayManeuver(savedManeuver, true);  // true = immediate render
+        }
+        
+        // Arrow
+        if (savedDirection.length() > 0) {
+            drawArrow(savedDirection);
+        }
+        
+        // Distance
+        if (savedDistance > 0) {
+            displayDistance(savedDistance);
+        }
+        
+        if (DEBUG_CALLS) {
+            Serial.println("[CALL] Navigation restored from saved state");
+        }
+    } else {
+        // No saved navigation - show current state or empty screen
+        gfx->fillScreen(COLOR_BLACK);
+        displayStatus("CONNECTED", COLOR_GREEN);
+        
+        if (currentDirection.length() > 0 || currentDistance > 0 || currentManeuver.length() > 0 || currentETA.length() > 0) {
+            // Restore current navigation
+            if (currentETA.length() > 0) displayETA(currentETA);
+            if (currentManeuver.length() > 0) displayManeuver(currentManeuver, true);
+            if (currentDirection.length() > 0) drawArrow(currentDirection);
+            if (currentDistance > 0) displayDistance(currentDistance);
+        } else {
+            Serial.println("[CALL] No navigation data to restore");
+        }
+    }
+}
+
+void drawRingingAnimation() {
+    // Draw pulsing dots for ringing effect
+    int centerX = SCREEN_WIDTH / 2;
+    int centerY = 200;
+    int radius = 8;
+    
+    // Calculate pulsing effect based on time
+    unsigned long time = millis();
+    int pulse = (time / 500) % 4; // Pulse every 500ms
+    
+    for (int i = 0; i < 5; i++) {
+        int x = centerX - 20 + (i * 10);
+        int alpha = (i == pulse) ? 255 : 100;
+        uint16_t color = (alpha > 150) ? COLOR_GREEN : COLOR_GRAY;
+        
+        gfx->fillCircle(x, centerY, radius, color);
+    }
+}
+
+void handlePhoneCallTouch(int x, int y) {
+    if (DEBUG_TOUCH) {
+        Serial.printf("[TOUCH] State: active=%d, missed=%d, state='%s'\n", 
+                      isPhoneCallActive, isMissedCallShowing, currentCallState.c_str());
+    }
+    
+    if (isPhoneCallActive || isMissedCallShowing) {
+        if (DEBUG_TOUCH) Serial.printf("[TOUCH] Phone call tapped at (%d,%d)\n", x, y);
+        
+        if (currentCallState == "INCOMING") {
+            Serial.println("[CALL] Rejected by user");
+            displayMissedCall(currentCallerName, currentCallerNumber, 1);
+        } else {
+            Serial.println("[CALL] Dismissed by user");
+            clearPhoneDisplay();
+        }
+    }
 }
 
 // ==== BLE CALLBACKS ====
@@ -459,20 +752,58 @@ class MyCallbacks : public BLECharacteristicCallbacks {
             
             StaticJsonDocument<256> doc;
             if (deserializeJson(doc, value) == DeserializationError::Ok) {
-                const char* dir = doc["direction"];
-                int dist = doc["distance"];
-                const char* man = doc["maneuver"];
+                const char* type = doc["type"];
                 
-                // Only parse ETA field (remove speed)
-                const char* eta = doc["eta"];
-                
-                drawArrow(String(dir));
-                displayDistance(dist);
-                displayManeuver(String(man ? man : ""));
-                
-                // Only display ETA if available
-                if (eta) {
-                    displayETA(String(eta));
+                if (strcmp(type, "phone_call") == 0) {
+                    // Handle phone call data
+                    const char* callerName = doc["caller_name"];
+                    const char* callerNumber = doc["caller_number"];
+                    const char* callState = doc["call_state"];
+                    int duration = doc["duration"] | 0;
+                    
+                    if (DEBUG_CALLS) {
+                        Serial.printf("[CALL] %s from %s (%s)\n", callState, callerName, callerNumber);
+                    }
+                    
+                    if (strcmp(callState, "INCOMING") == 0) {
+                        displayIncomingCall(String(callerName ? callerName : "Unknown"), String(callerNumber ? callerNumber : ""));
+                    } else if (strcmp(callState, "ONGOING") == 0) {
+                        displayOngoingCall(String(callerName ? callerName : "Unknown"), duration);
+                    } else if (strcmp(callState, "MISSED") == 0) {
+                        String name = currentCallerName.length() > 0 ? currentCallerName : String(callerName ? callerName : "Unknown");
+                        String number = currentCallerNumber.length() > 0 ? currentCallerNumber : String(callerNumber ? callerNumber : "");
+                        displayMissedCall(name, number, 1);
+                    } else if (strcmp(callState, "ENDED") == 0) {
+                        clearPhoneDisplay();
+                    }
+                } else {
+                    // Handle navigation data
+                    const char* dir = doc["direction"];
+                    int dist = doc["distance"];
+                    const char* man = doc["maneuver"];
+                    const char* eta = doc["eta"];
+                    
+                    if (DEBUG_NAVIGATION) {
+                        Serial.printf("[NAV] dir=%s, dist=%d, man=%s, eta=%s\n", dir, dist, man, eta);
+                    }
+                    
+                    currentDirection = String(dir ? dir : "");
+                    currentDistance = dist;
+                    currentManeuver = String(man ? man : "");
+                    currentETA = String(eta ? eta : "");
+                    
+                    if (DEBUG_NAVIGATION) {
+                        Serial.printf("[NAV] Stored state - dir:%s, dist:%d, man:%s, eta:%s\n", 
+                                      currentDirection.c_str(), currentDistance, currentManeuver.c_str(), currentETA.c_str());
+                    }
+                    
+                    drawArrow(currentDirection);
+                    displayDistance(currentDistance);
+                    displayManeuver(currentManeuver);
+                    
+                    if (eta) {
+                        displayETA(currentETA);
+                    }
                 }
             }
         }
@@ -490,6 +821,15 @@ void setup() {
     gfx->fillScreen(0x0000);
     
     displayStatus("STARTING...", 0xFFE0);
+    
+    // Initialize touch
+    // Configure I2C pins for touch controller
+    Wire.begin(Touch_I2C_SDA, Touch_I2C_SCL);
+    
+    // Initialize touch controller using library's function
+    bsp_touch_init(&Wire, Touch_RST, Touch_INT, gfx->getRotation(), gfx->width(), gfx->height());
+    touchEnabled = true;
+    Serial.println("Touch controller initialized");
     
     BLEDevice::init("ESP32_BLE");
     BLEServer *pServer = BLEDevice::createServer();
@@ -518,5 +858,52 @@ void setup() {
 }
 
 void loop() {
-    delay(1000);
+    // Check for touch input using library's functions
+    if (touchEnabled) {
+        touch_data_t touch_data;
+        bsp_touch_read();
+        bool touchpad_pressed = bsp_touch_get_coordinates(&touch_data);
+        
+        if (touchpad_pressed) {
+            Serial.printf("Touch detected: num=%d, x=%d, y=%d\n", 
+                        touch_data.touch_num, 
+                        touch_data.coords[0].x, 
+                        touch_data.coords[0].y);
+            
+            // IMPORTANT: Touch coordinates are valid when bsp_touch_get_coordinates returns true
+            // Even if touch_data.touch_num is 0, the coordinates are valid
+            int x = touch_data.coords[0].x;
+            int y = touch_data.coords[0].y;
+            
+            // Only process if coordinates are valid (greater than 0)
+            if (x > 0 && y > 0) {
+                Serial.printf("Processing touch at (%d, %d)\n", x, y);
+                handlePhoneCallTouch(x, y);
+            } else {
+                Serial.println("Touch coordinates invalid");
+            }
+        }
+        
+        // Add periodic touch test
+        static unsigned long lastTouchTest = 0;
+        if (millis() - lastTouchTest > 5000) { // Every 5 seconds
+            Serial.println("Touch system active - waiting for input...");
+            lastTouchTest = millis();
+        }
+    }
+    
+    // Add timeout check for incoming calls
+    if (isPhoneCallActive && currentCallState == "INCOMING") {
+        unsigned long currentTime = millis();
+        if (currentTime - callStartTime > 30000) { // 30 seconds timeout
+            Serial.println("Incoming call timeout - treating as missed");
+            displayMissedCall(currentCallerName, currentCallerNumber, 1);
+        } else {
+            drawRingingAnimation();
+        }
+    }
+    
+    delay(100);
 }
+
+// Touch functions are provided by the library - no need to implement them

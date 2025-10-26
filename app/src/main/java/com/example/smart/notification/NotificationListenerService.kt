@@ -7,6 +7,7 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.example.smart.ble.WorkingBLEService
 import com.example.smart.model.NavigationData
+import com.example.smart.notification.PhoneCallParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -113,13 +114,86 @@ class NotificationListenerService : NotificationListenerService() {
         Log.i(TAG, "Text: $text")
         Log.i(TAG, "BigText: $bigText")
         Log.i(TAG, "BLE Service Available: ${bleService != null}")
+        
+        // Enhanced debugging for phone notifications
+        if (PhoneCallParser.isPhoneCallNotification(packageName, title, text)) {
+            Log.i(TAG, "🔔 PHONE NOTIFICATION DETECTED!")
+            Log.i(TAG, "Package matches phone app: $packageName")
+        }
 
         // Route notification based on package name
         when (packageName) {
             "com.google.android.apps.maps" -> handleGoogleMapsNotification(sbn, title, text, bigText)
-            "com.android.server.telecom", "com.android.dialer" -> handlePhoneNotification(sbn, title, text, bigText)
-            // Future: Music apps
-            else -> Log.d(TAG, "Notification from other app: $packageName")
+            
+            // Universal phone package routing - All Indian device brands
+            "com.android.server.telecom", 
+            "com.android.dialer",
+            "com.android.incallui",
+            "com.android.phone",
+            "com.android.telecom",
+            
+            // Samsung (India's #1 brand - 30% market share)
+            "com.samsung.android.dialer",
+            "com.samsung.android.incallui",
+            "com.samsung.android.phone",
+            
+            // Xiaomi/Redmi (India's #2 brand - 20% market share)
+            "com.miui.phone",
+            "com.miui.incallui",
+            "com.miui.dialer",
+            
+            // OnePlus (8% market share)
+            "com.oneplus.incallui",
+            "com.oneplus.dialer",
+            "com.oneplus.phone",
+            
+            // Realme (12% market share)
+            "com.coloros.incallui",
+            "com.coloros.dialer",
+            "com.coloros.phone",
+            
+            // Vivo (10% market share)
+            "com.vivo.incallui",
+            "com.vivo.dialer",
+            "com.vivo.phone",
+            
+            // Oppo (8% market share)
+            "com.oppo.incallui",
+            "com.oppo.dialer",
+            "com.oppo.phone",
+            
+            // Google Pixel (5% market share)
+            "com.google.android.dialer",
+            "com.google.android.incallui",
+            
+            // Motorola (3% market share)
+            "com.motorola.dialer",
+            "com.motorola.incallui",
+            "com.motorola.phone",
+            
+            // Huawei/Honor
+            "com.huawei.contacts",
+            "com.huawei.incallui",
+            "com.huawei.dialer",
+            "com.hihonor.incallui",
+            
+            // Nokia
+            "com.nokia.dialer",
+            "com.nokia.incallui",
+            
+            // Generic fallbacks
+            "com.android.contacts",
+            "com.android.calllog" -> handlePhoneNotification(sbn, title, text, bigText)
+            
+            else -> {
+                // Check if it's a phone notification by content analysis
+                if (PhoneCallParser.isPhoneCallNotification(packageName, title, text)) {
+                    Log.i(TAG, "Detected phone notification by content analysis: $packageName")
+                    handlePhoneNotification(sbn, title, text, bigText)
+                } else {
+                    Log.d(TAG, "Notification from other app: $packageName")
+                }
+            }
         }
     }
 
@@ -160,11 +234,80 @@ class NotificationListenerService : NotificationListenerService() {
     }
 
     private fun handlePhoneNotification(sbn: StatusBarNotification, title: String?, text: String?, bigText: String?) {
-        // Future implementation for phone call notifications
-        Log.d(TAG, "Phone notification received - future feature")
+        Log.i(TAG, "=== PHONE NOTIFICATION RECEIVED ===")
+        Log.i(TAG, "Package: ${sbn.packageName}")
+        Log.i(TAG, "Title: $title")
+        Log.i(TAG, "Text: $text")
+        Log.i(TAG, "BigText: $bigText")
         
-        // Store notification for debugging
-        storeNotificationForDebugging(sbn.packageName, title, text, bigText, false, false, null)
+        // Extract phone number from notification extras
+        val extras = sbn.notification.extras
+        var phoneNumber: String? = null
+        
+        // Try to get phone number from various common keys
+        extras?.let {
+            phoneNumber = it.getCharSequence("android.phoneNumber")?.toString()
+                ?: it.getCharSequence("android.phone_number")?.toString()
+                ?: it.getCharSequence("phone_number")?.toString()
+                ?: it.getCharSequence("number")?.toString()
+                ?: it.getString("android.phoneNumber")
+                ?: it.getString("phone_number")
+                ?: it.getString("number")
+            
+            if (phoneNumber != null) {
+                Log.i(TAG, "📞 Phone number found in extras: $phoneNumber")
+            } else {
+                Log.d(TAG, "No phone number in extras, available keys: ${it.keySet()}")
+            }
+        }
+        
+        // Check if it's Samsung dialer specifically
+        if (sbn.packageName.contains("samsung")) {
+            Log.i(TAG, "🔍 SAMSUNG DIALER DETECTED - Enhanced debugging")
+            Log.i(TAG, "Notification ID: ${sbn.id}")
+            Log.i(TAG, "Post time: ${sbn.postTime}")
+            Log.i(TAG, "Full notification extras: ${sbn.notification.extras}")
+            Log.i(TAG, "All extras keys: ${extras?.keySet()}")
+        }
+        
+        // Parse phone call data
+        val phoneCallData = PhoneCallParser.parsePhoneNotification(
+            sbn.packageName,
+            title,
+            text,
+            bigText,
+            phoneNumber
+        )
+        
+        if (phoneCallData != null) {
+            Log.i(TAG, "✅ PARSED PHONE CALL DATA: $phoneCallData")
+            
+            // Send to debug log
+            debugLogCallback?.invoke("Phone: ${phoneCallData.callerName} - ${phoneCallData.callState.displayName}")
+            
+            // Send to BLE service
+            bleService?.let { service ->
+                Log.i(TAG, "Sending phone call data to BLE service...")
+                CoroutineScope(Dispatchers.IO).launch {
+                    service.sendPhoneCallData(phoneCallData)
+                }
+            } ?: Log.e(TAG, "❌ BLE SERVICE NOT AVAILABLE!")
+            
+            // Store notification for debugging
+            storeNotificationForDebugging(
+                sbn.packageName, 
+                title, 
+                text, 
+                bigText, 
+                false, 
+                true, 
+                phoneCallData.toString()
+            )
+        } else {
+            Log.w(TAG, "Failed to parse phone call data")
+            // Store notification for debugging
+            storeNotificationForDebugging(sbn.packageName, title, text, bigText, false, false, null)
+        }
     }
 
     private fun storeNotificationForDebugging(

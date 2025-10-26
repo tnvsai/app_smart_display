@@ -43,6 +43,8 @@ import androidx.lifecycle.lifecycleScope
 import com.example.smart.ble.WorkingBLEService
 import com.example.smart.model.Direction
 import com.example.smart.model.NavigationData
+import com.example.smart.model.PhoneCallData
+import com.example.smart.model.CallState
 import com.example.smart.notification.NotificationListenerService
 import com.example.smart.permission.PermissionHandler
 import com.example.smart.service.NavigationService
@@ -304,7 +306,7 @@ fun CollapsibleCard(
                 )
             }
             if (expanded) {
-                Divider(
+                HorizontalDivider(
                     modifier = Modifier.padding(vertical = 8.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
                 )
@@ -834,7 +836,90 @@ fun NavigationApp(
                     
                     Spacer(modifier = Modifier.height(8.dp))
                     
-                    Divider(modifier = Modifier.padding(vertical = 4.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    
+                    // Phone Call Test Buttons
+                    Text(
+                        text = "Phone Call Tests",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                    
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                val testData = PhoneCallData(
+                                    callerName = "John Doe",
+                                    callerNumber = "+1 234-567-8900",
+                                    callState = CallState.INCOMING
+                                )
+                                bleService.sendPhoneCallData(testData)
+                                addDebugLog("Test: Incoming Call")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                        ) {
+                            Text("Incoming Call", fontSize = 12.sp)
+                        }
+                        
+                        Button(
+                            onClick = {
+                                val testData = PhoneCallData(
+                                    callerName = "Jane Smith",
+                                    callerNumber = "+1 555-123-4567",
+                                    callState = CallState.ONGOING,
+                                    duration = 125 // 2 minutes 5 seconds
+                                )
+                                bleService.sendPhoneCallData(testData)
+                                addDebugLog("Test: Ongoing Call")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
+                        ) {
+                            Text("Ongoing Call", fontSize = 12.sp)
+                        }
+                        
+                        Button(
+                            onClick = {
+                                val testData = PhoneCallData(
+                                    callerName = "Mom",
+                                    callerNumber = "+1 555-987-6543",
+                                    callState = CallState.MISSED
+                                )
+                                bleService.sendPhoneCallData(testData)
+                                addDebugLog("Test: Missed Call")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
+                        ) {
+                            Text("Missed Call", fontSize = 12.sp)
+                        }
+                        
+                        Button(
+                            onClick = {
+                                val testData = PhoneCallData(
+                                    callerName = "",
+                                    callerNumber = "",
+                                    callState = CallState.ENDED
+                                )
+                                bleService.sendPhoneCallData(testData)
+                                addDebugLog("Test: Call Ended")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9E9E9E))
+                        ) {
+                            Text("End Call", fontSize = 12.sp)
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     
                     // Test Sequence Mode
                     var isRunningSequence by remember { mutableStateOf(false) }
