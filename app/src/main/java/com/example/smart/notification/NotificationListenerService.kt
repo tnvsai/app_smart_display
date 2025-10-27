@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.regex.Pattern
 
 /**
  * Data class to store notification information for debugging
@@ -42,6 +43,47 @@ class NotificationListenerService : NotificationListenerService() {
         // Store recent notifications for debugging
         private val recentNotifications = mutableListOf<NotificationInfo>()
         private const val MAX_RECENT_NOTIFICATIONS = 20
+        
+        // Track sent missed calls with timestamps to avoid duplicates within a time window
+        private val sentMissedCallsTime = mutableMapOf<String, Long>()
+        private const val MISSED_CALL_DEDUP_WINDOW_MS = 30000L // 30 seconds
+        
+        // Track if incoming calls were answered (to determine if ENDED means MISSED)
+        private val incomingCalls = mutableMapOf<String, Boolean>()  // Map of caller number to wasAnswered
+        
+        // Phone call debug data
+        data class PhoneDebugLog(
+            val timestamp: String,
+            val state: String,
+            val title: String?,
+            val text: String?,
+            val callerName: String?,
+            val callerNumber: String?,
+            val sentToMCU: Boolean
+        )
+        
+        private val phoneDebugLogs = mutableListOf<PhoneDebugLog>()
+        private const val MAX_PHONE_DEBUG_LOGS = 20
+        
+        var phoneDebugLogCallback: ((PhoneDebugLog) -> Unit)? = null
+            private set
+        
+        // Debug function to clear tracking (for testing)
+        fun clearMissedCallTracking() {
+            sentMissedCallsTime.clear()
+            incomingCalls.clear()
+            Log.i(TAG, "🧹 Cleared missed call tracking")
+        }
+        
+        fun setPhoneDebugLogCallback(callback: (PhoneDebugLog) -> Unit) {
+            phoneDebugLogCallback = callback
+        }
+        
+        fun getPhoneDebugLogs(): List<PhoneDebugLog> = phoneDebugLogs.toList()
+        
+        fun clearPhoneDebugLogs() {
+            phoneDebugLogs.clear()
+        }
         
         // Debug log callback
         var debugLogCallback: ((String) -> Unit)? = null
@@ -108,11 +150,11 @@ class NotificationListenerService : NotificationListenerService() {
         val bigText = notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
 
         // Log ALL notifications for debugging
-        Log.i(TAG, "=== NOTIFICATION RECEIVED ===")
-        Log.i(TAG, "Package: $packageName")
-        Log.i(TAG, "Title: $title")
-        Log.i(TAG, "Text: $text")
-        Log.i(TAG, "BigText: $bigText")
+        Log.i(TAG, "🔔🔔🔔 === NOTIFICATION RECEIVED === 🔔🔔🔔")
+        Log.i(TAG, "📦 Package: $packageName")
+        Log.i(TAG, "📝 Title: $title")
+        Log.i(TAG, "💬 Text: $text")
+        Log.i(TAG, "📄 BigText: $bigText")
         Log.i(TAG, "BLE Service Available: ${bleService != null}")
         
         // Enhanced debugging for phone notifications
@@ -216,8 +258,7 @@ class NotificationListenerService : NotificationListenerService() {
             if (navigationData != null) {
                 Log.i(TAG, "✅ PARSED NAVIGATION DATA: $navigationData")
                 
-                // Send to debug log
-                debugLogCallback?.invoke("Google Maps: ${navigationData.direction?.name} - ${navigationData.distance}")
+                // Don't log here - will log in WorkingBLEService after sending
 
                 // Send to BLE service
                 bleService?.let { service ->
@@ -257,7 +298,23 @@ class NotificationListenerService : NotificationListenerService() {
             if (phoneNumber != null) {
                 Log.i(TAG, "📞 Phone number found in extras: $phoneNumber")
             } else {
-                Log.d(TAG, "No phone number in extras, available keys: ${it.keySet()}")
+                Log.i(TAG, "🔍 No phone number in extras, dumping all key-value pairs:")
+                it.keySet().forEach { key ->
+                    try {
+                        val value = it.get(key)
+                        Log.i(TAG, "  Key='$key', Value='$value' (type: ${value?.javaClass?.simpleName})")
+                    } catch (e: Exception) {
+                        Log.i(TAG, "  Key='$key', Error reading value: ${e.message}")
+                    }
+                }
+            }
+        }
+        
+        // If phone number not found in extras, try extracting from text
+        if (phoneNumber == null || phoneNumber.isEmpty()) {
+            phoneNumber = extractPhoneNumber(text) ?: extractPhoneNumber(bigText)
+            if (phoneNumber != null) {
+                Log.i(TAG, "📞 Phone number extracted from text: $phoneNumber")
             }
         }
         
@@ -282,16 +339,80 @@ class NotificationListenerService : NotificationListenerService() {
         if (phoneCallData != null) {
             Log.i(TAG, "✅ PARSED PHONE CALL DATA: $phoneCallData")
             
-            // Send to debug log
-            debugLogCallback?.invoke("Phone: ${phoneCallData.callerName} - ${phoneCallData.callState.displayName}")
+            // Add phone call debug log
+            val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val debugLog = PhoneDebugLog(
+                timestamp = timestamp,
+                state = phoneCallData.callState.toString(),
+                title = title,
+                text = text,
+                callerName = phoneCallData.callerName,
+                callerNumber = phoneCallData.callerNumber,
+                sentToMCU = false // Will be updated when actually sent
+            )
             
-            // Send to BLE service
-            bleService?.let { service ->
-                Log.i(TAG, "Sending phone call data to BLE service...")
-                CoroutineScope(Dispatchers.IO).launch {
-                    service.sendPhoneCallData(phoneCallData)
+            // Add to phone debug logs
+            phoneDebugLogs.add(0, debugLog)
+            if (phoneDebugLogs.size > MAX_PHONE_DEBUG_LOGS) {
+                phoneDebugLogs.removeLast()
+            }
+            
+            // Notify callback
+            phoneDebugLogCallback?.invoke(debugLog)
+            
+            // Track call state transitions
+            val callerKey = "${phoneCallData.callerName}:${phoneCallData.callerNumber}"
+            
+            when (phoneCallData.callState) {
+                com.example.smart.model.CallState.INCOMING -> {
+                    // Mark this incoming call as not yet answered
+                    incomingCalls[callerKey] = false
+                    Log.i(TAG, "📞 INCOMING call from $callerKey - marking as not answered")
+                    
+                    // Send INCOMING state to MCU
+                    sendPhoneCallData(phoneCallData)
                 }
-            } ?: Log.e(TAG, "❌ BLE SERVICE NOT AVAILABLE!")
+                com.example.smart.model.CallState.ONGOING -> {
+                    // Call was answered
+                    incomingCalls[callerKey] = true
+                    Log.i(TAG, "✅ Call answered - marking $callerKey as answered")
+                    
+                    // Clear any pending missed call tracking for this caller
+                    val missedCallKeyToRemove = "$callerKey"
+                    if (sentMissedCallsTime.containsKey(missedCallKeyToRemove)) {
+                        sentMissedCallsTime.remove(missedCallKeyToRemove)
+                        Log.i(TAG, "🗑️ Cleared missed call tracking for answered call: $missedCallKeyToRemove")
+                    }
+                    
+                    // Send ONGOING state to MCU
+                    sendPhoneCallData(phoneCallData)
+                }
+                com.example.smart.model.CallState.ENDED -> {
+                    // Check if this call was never answered (missed)
+                    val wasAnswered = incomingCalls[callerKey] ?: false
+                    Log.i(TAG, "📴 Call ended - wasAnswered: $wasAnswered")
+                    
+                    if (!wasAnswered) {
+                        // This was a missed call - send MISSED state
+                        Log.i(TAG, "❌ Detected MISSED call - caller never answered")
+                        val missedCallData = com.example.smart.model.PhoneCallData(
+                            callerName = phoneCallData.callerName,
+                            callerNumber = phoneCallData.callerNumber,
+                            callState = com.example.smart.model.CallState.MISSED,
+                            duration = 0
+                        )
+                        processMissedCall(missedCallData)
+                    }
+                    
+                    // Clean up tracking
+                    incomingCalls.remove(callerKey)
+                }
+                com.example.smart.model.CallState.MISSED -> {
+                    // Direct MISSED notification from system
+                    Log.i(TAG, "❌ Direct MISSED call notification received")
+                    processMissedCall(phoneCallData)
+                }
+            }
             
             // Store notification for debugging
             storeNotificationForDebugging(
@@ -343,6 +464,66 @@ class NotificationListenerService : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         super.onNotificationRemoved(sbn)
         Log.d(TAG, "Notification removed: ${sbn.packageName}")
+        
+        // Check if this is a phone notification that was removed
+        if (PhoneCallParser.isPhoneCallNotification(sbn.packageName, null, null)) {
+            Log.i(TAG, "🔔 Phone notification removed - checking if call was missed...")
+            
+            val notification = sbn.notification
+            val title = notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+            val text = notification.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+            val bigText = notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+            
+            // Extract phone number
+            val extras = notification.extras
+            var phoneNumber: String? = null
+            extras?.let {
+                phoneNumber = it.getCharSequence("android.phoneNumber")?.toString()
+                    ?: it.getCharSequence("android.phone_number")?.toString()
+                    ?: it.getCharSequence("phone_number")?.toString()
+                    ?: it.getCharSequence("number")?.toString()
+                    ?: it.getString("android.phoneNumber")
+                    ?: it.getString("phone_number")
+                    ?: it.getString("number")
+            }
+            
+            if (phoneNumber == null || phoneNumber.isEmpty()) {
+                phoneNumber = extractPhoneNumber(text) ?: extractPhoneNumber(bigText)
+            }
+            
+            // Parse to get caller info
+            val phoneCallData = PhoneCallParser.parsePhoneNotification(
+                sbn.packageName,
+                title,
+                text,
+                bigText,
+                phoneNumber
+            )
+            
+            if (phoneCallData != null) {
+                val callerKey = "${phoneCallData.callerName}:${phoneCallData.callerNumber}"
+                
+                // If this was an INCOMING call and it was never answered, treat as missed
+                val wasAnswered = incomingCalls[callerKey] ?: false
+                
+                Log.i(TAG, "Call removed - wasAnswered: $wasAnswered")
+                
+                if (!wasAnswered) {
+                    // This was a missed call (caller hung up before answer)
+                    Log.i(TAG, "❌ Detected MISSED call via notification removal - caller hung up")
+                    val missedCallData = com.example.smart.model.PhoneCallData(
+                        callerName = phoneCallData.callerName,
+                        callerNumber = phoneCallData.callerNumber,
+                        callState = com.example.smart.model.CallState.MISSED,
+                        duration = 0
+                    )
+                    processMissedCall(missedCallData)
+                    
+                    // Clean up tracking
+                    incomingCalls.remove(callerKey)
+                }
+            }
+        }
     }
     
     override fun onListenerConnected() {
@@ -383,6 +564,86 @@ class NotificationListenerService : NotificationListenerService() {
      */
     fun isServiceRunning(): Boolean {
         return instance != null && hasNotificationAccess()
+    }
+    
+    private fun processMissedCall(missedCallData: com.example.smart.model.PhoneCallData) {
+        val missedCallKey = "${missedCallData.callerName}:${missedCallData.callerNumber}"
+        val currentTime = System.currentTimeMillis()
+        
+        Log.i(TAG, "🔔 Processing missed call: name='${missedCallData.callerName}', number='${missedCallData.callerNumber}'")
+        Log.i(TAG, "🔑 Missed call key: '$missedCallKey'")
+        
+        // Check if we sent this missed call recently (within dedup window)
+        val lastSentTime = sentMissedCallsTime[missedCallKey]
+        if (lastSentTime != null && (currentTime - lastSentTime) < MISSED_CALL_DEDUP_WINDOW_MS) {
+            val timeSinceLast = currentTime - lastSentTime
+            Log.i(TAG, "⏭ MISSED call sent recently (${timeSinceLast}ms ago), skipping duplicate")
+            return
+        }
+        
+        // Update timestamp and send
+        sentMissedCallsTime[missedCallKey] = currentTime
+        Log.i(TAG, "✅ Sending MISSED call (new or expired): $missedCallKey")
+        Log.i(TAG, "📤 Calling sendPhoneCallData...")
+        
+        sendPhoneCallData(missedCallData)
+    }
+    
+    private fun sendPhoneCallData(phoneCallData: com.example.smart.model.PhoneCallData) {
+        Log.i(TAG, "📞 sendPhoneCallData called with: $phoneCallData")
+        Log.i(TAG, "🔍 BLE service is: $bleService")
+        
+        // Send to BLE service
+        bleService?.let { service ->
+            Log.i(TAG, "✅ BLE service available, sending phone call data...")
+            CoroutineScope(Dispatchers.IO).launch {
+                Log.i(TAG, "🚀 Launching coroutine to call service.sendPhoneCallData...")
+                service.sendPhoneCallData(phoneCallData)
+                Log.i(TAG, "✅ service.sendPhoneCallData completed")
+            }
+        } ?: Log.e(TAG, "❌ BLE SERVICE NOT AVAILABLE!")
+    }
+    
+    /**
+     * Extract phone number from text using regex patterns
+     * Supports Indian and international formats
+     */
+    private fun extractPhoneNumber(text: String?): String? {
+        if (text.isNullOrBlank()) return null
+        
+        // Phone number patterns (ordered by priority)
+        val patterns = listOf(
+            // Indian mobile with country code
+            "(\\+91[-\\s]?[6-9]\\d{9})",
+            // Indian mobile without country code (10 digits starting with 6-9)
+            "([6-9]\\d{9})",
+            // International format
+            "(\\+\\d{10,15})",
+            // Generic 10-15 digit number
+            "([0-9]{10,15})",
+            // US/International formats
+            "(\\+?\\d{1,3}[\\s-]?\\(?\\d{3}\\)?[\\s-]?\\d{3}[\\s-]?\\d{4})",
+            // Standard format
+            "(\\d{3}[\\s-]?\\d{3}[\\s-]?\\d{4})"
+        )
+        
+        for (patternStr in patterns) {
+            val pattern = Pattern.compile(patternStr)
+            val matcher = pattern.matcher(text)
+            if (matcher.find()) {
+                val number = matcher.group(0)?.trim()
+                if (number != null && number.length >= 10) {
+                    // Clean up the number (remove spaces, dashes, parentheses)
+                    val cleaned = number.replace(Regex("[\\s()-]"), "")
+                    // Validate it looks like a phone number
+                    if (cleaned.matches(Regex("\\d{10,15}"))) {
+                        return cleaned
+                    }
+                }
+            }
+        }
+        
+        return null
     }
     
 }

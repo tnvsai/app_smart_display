@@ -105,18 +105,24 @@ class MainActivity : ComponentActivity() {
         bleService = WorkingBLEService(this)
         
         // Connect notification service to BLE service
-        NotificationListenerService.setBLEService(bleService)
-        
-        // Set debug log callback for notifications
-        NotificationListenerService.setDebugLogCallback { message ->
-            // This will be set from the composable
-        }
+        // Use the singleton BLE service from NavigationService if available
+        NotificationListenerService.setBLEService(
+            NavigationService.getInstance()?.getBLEService() ?: bleService
+        )
         
         setContent {
             SmartTheme {
+                // Use NavigationService's BLE instance if available, otherwise fallback to local instance
+                var activeBLEService by remember { mutableStateOf(bleService) }
+                
+                // Update to use singleton BLE service when NavigationService is available
+                LaunchedEffect(Unit) {
+                    activeBLEService = NavigationService.getInstance()?.getBLEService() ?: bleService
+                }
+                
                 NavigationApp(
                     permissionHandler = permissionHandler,
-                    bleService = bleService,
+                    bleService = activeBLEService,
                     activity = this,
                     onRequestPermissions = { requestPermissions() },
                     onStartService = { startNavigationService() },
@@ -178,12 +184,17 @@ class MainActivity : ComponentActivity() {
         if (navigationService == null) {
             Log.i(TAG, "Starting navigation service")
             NavigationService.startService(this)
-            navigationService = NavigationService()
+            // Get singleton instance instead of creating new one
+            navigationService = NavigationService.getInstance()
         }
         
-        // Also start BLE scanning
+        // Start BLE scanning using NavigationService's BLE instance
         Log.i(TAG, "Starting BLE scanning")
-        bleService.startScanning()
+        val navService = NavigationService.getInstance()
+        navService?.getBLEService()?.startScanning() ?: run {
+            Log.w(TAG, "NavigationService BLE not available, using local instance")
+            bleService.startScanning()
+        }
         
         // Debug notification service status
         val notificationService = NotificationListenerService.getInstance()
@@ -372,6 +383,17 @@ fun NavigationApp(
     var manualDistance by remember { mutableStateOf("") }
     var manualManeuver by remember { mutableStateOf("") }
     
+    // Phone call debug section
+    var phoneCallSectionExpanded by remember { mutableStateOf(false) }
+    var phoneDebugLogs by remember { mutableStateOf(emptyList<NotificationListenerService.Companion.PhoneDebugLog>()) }
+    
+    // Connect phone debug callback
+    LaunchedEffect(Unit) {
+        NotificationListenerService.setPhoneDebugLogCallback { log ->
+            phoneDebugLogs = (listOf(log) + phoneDebugLogs).take(20)
+        }
+    }
+    
     Scaffold(
         topBar = {
             TopAppBar(
@@ -531,16 +553,29 @@ fun NavigationApp(
                     
                     Spacer(modifier = Modifier.height(12.dp))
                     
-                    // Stop All Services Button
-                    Button(
-                        onClick = onStopAllServices,
+                    // Start/Stop Service Buttons
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Stop All Services")
+                        Button(
+                            onClick = onStartService,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                        ) {
+                            Text("Start Services")
+                        }
+                        
+                        Button(
+                            onClick = onStopAllServices,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                        ) {
+                            Text("Stop All")
+                        }
                     }
                     Text(
-                        text = "Note: App will remain open. You can restart services manually.",
+                        text = "Start: Connect to MCU | Stop: Disconnect all services",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
                         modifier = Modifier.padding(top = 4.dp)
@@ -1025,12 +1060,101 @@ fun NavigationApp(
                                          }
                                      }
                                  }
+                }
+            }
+        }
+    }
+}
+
+             // Phone Call Debug Card
+             item {
+                 CollapsibleCard(
+                     title = "Phone Call Debug (${phoneDebugLogs.size})",
+                     expanded = phoneCallSectionExpanded,
+                     onExpandChange = { phoneCallSectionExpanded = it },
+                     backgroundColor = Color(0xFF9C27B0).copy(alpha = 0.1f)
+                 ) {
+                     if (phoneDebugLogs.isEmpty()) {
+                         Text(
+                             "No phone notifications received yet. Make or receive a call to see data.",
+                             style = MaterialTheme.typography.bodySmall,
+                             color = Color.Gray
+                         )
+                     } else {
+                         Column(
+                             modifier = Modifier
+                                 .fillMaxWidth()
+                                 .heightIn(max = 400.dp),
+                             verticalArrangement = Arrangement.spacedBy(8.dp)
+                         ) {
+                             phoneDebugLogs.take(10).forEach { log ->
+                                 Card(
+                                     modifier = Modifier.fillMaxWidth(),
+                                     colors = CardDefaults.cardColors(
+                                         containerColor = when (log.state) {
+                                             "INCOMING" -> Color(0xFF4CAF50).copy(alpha = 0.1f)
+                                             "MISSED" -> Color(0xFFF44336).copy(alpha = 0.1f)
+                                             "ONGOING" -> Color(0xFF2196F3).copy(alpha = 0.1f)
+                                             "ENDED" -> Color(0xFF9E9E9E).copy(alpha = 0.1f)
+                                             else -> Color.Black.copy(alpha = 0.05f)
+                                         }
+                                     )
+                                 ) {
+                                     Column(modifier = Modifier.padding(8.dp)) {
+                                         Row(
+                                             modifier = Modifier.fillMaxWidth(),
+                                             horizontalArrangement = Arrangement.SpaceBetween
+                                         ) {
+                                             Text(
+                                                 log.timestamp,
+                                                 style = MaterialTheme.typography.bodySmall,
+                                                 fontWeight = FontWeight.Bold
+                                             )
+                                             Text(
+                                                 log.state,
+                                                 style = MaterialTheme.typography.bodySmall,
+                                                 fontWeight = FontWeight.Bold,
+                                                 color = when (log.state) {
+                                                     "INCOMING" -> Color(0xFF4CAF50)
+                                                     "MISSED" -> Color(0xFFF44336)
+                                                     "ONGOING" -> Color(0xFF2196F3)
+                                                     "ENDED" -> Color(0xFF9E9E9E)
+                                                     else -> Color.Gray
+                                                 }
+                                             )
+                                         }
+                                         Text(
+                                             "Name: ${log.callerName ?: "Unknown"}",
+                                             style = MaterialTheme.typography.bodySmall,
+                                             modifier = Modifier.padding(top = 4.dp)
+                                         )
+                                         Text(
+                                             "Number: ${log.callerNumber ?: "Unknown"}",
+                                             style = MaterialTheme.typography.bodySmall
+                                         )
+                                         if (log.title != null) {
+                                             Text(
+                                                 "Title: ${log.title}",
+                                                 style = MaterialTheme.typography.bodySmall,
+                                                 color = Color.Gray,
+                                                 modifier = Modifier.padding(top = 4.dp)
+                                             )
+                                         }
+                                         if (log.text != null) {
+                                             Text(
+                                                 "Text: ${log.text}",
+                                                 style = MaterialTheme.typography.bodySmall,
+                                                 color = Color.Gray
+                                             )
+                                         }
+                                     }
+                                 }
                              }
                          }
                      }
                  }
              }
-             
+
              // Debug Logs Card
              item {
                  CollapsibleCard(
@@ -1038,7 +1162,7 @@ fun NavigationApp(
                      expanded = debugSectionExpanded,
                      onExpandChange = { debugSectionExpanded = it },
                      backgroundColor = Color.Black.copy(alpha = 0.05f)
-                 ) {
+                                      ) {
                      Row(
                          modifier = Modifier.fillMaxWidth(),
                          horizontalArrangement = Arrangement.SpaceBetween

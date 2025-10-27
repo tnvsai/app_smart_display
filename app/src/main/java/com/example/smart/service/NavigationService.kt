@@ -27,7 +27,12 @@ class NavigationService : Service() {
         private const val CHANNEL_ID = "navigation_service_channel"
         private const val CHANNEL_NAME = "Navigation Service"
         const val ACTION_STOP_SERVICE = "com.example.smart.STOP_SERVICE"
-        const val ACTION_DISCONNECT_BLE = "com.example.smart.DISCONNECT_BLE"
+        const val ACTION_START_SERVICE = "com.example.smart.START_SERVICE"
+        
+        // Static instance to share BLE service
+        @Volatile
+        private var instance: NavigationService? = null
+        fun getInstance(): NavigationService? = instance
         
         fun startService(context: Context) {
             val intent = Intent(context, NavigationService::class.java)
@@ -51,6 +56,9 @@ class NavigationService : Service() {
         super.onCreate()
         Log.i(TAG, "NavigationService created")
         
+        // Set static instance
+        instance = this
+        
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
         
@@ -65,13 +73,32 @@ class NavigationService : Service() {
         when (intent?.action) {
             ACTION_STOP_SERVICE -> {
                 Log.i(TAG, "Stop action received from notification")
+                
+                // Disconnect BLE
+                bleService?.cleanup()
+                
+                // Null BLE reference in notification listener
+                NotificationListenerService.setBLEService(null)
+                
                 stopSelf()
                 return START_NOT_STICKY
             }
-            ACTION_DISCONNECT_BLE -> {
-                Log.i(TAG, "Disconnect BLE action received from notification")
-                bleService?.disconnect()
-                updateNotification("BLE Disconnected")
+            ACTION_START_SERVICE -> {
+                Log.i(TAG, "Start action received from notification")
+                
+                // Ensure BLE service is initialized (if it was null for some reason)
+                if (bleService == null) {
+                    Log.w(TAG, "BLE service was null, reinitializing...")
+                    bleService = WorkingBLEService(this)
+                    NotificationListenerService.setBLEService(bleService!!)
+                }
+                
+                // Start BLE scanning to connect to MCU
+                bleService?.startScanning()
+                
+                // Restart foreground notification
+                startForeground(NOTIFICATION_ID, createNotification("Connecting to MCU..."))
+                
                 return START_STICKY
             }
         }
@@ -94,6 +121,9 @@ class NavigationService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "NavigationService destroyed")
+        
+        // Clear static instance
+        instance = null
         
         // Clean up BLE service
         bleService?.cleanup()
@@ -144,14 +174,14 @@ class NavigationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
-        // Disconnect BLE Action
-        val disconnectIntent = Intent(this, NavigationService::class.java).apply {
-            action = ACTION_DISCONNECT_BLE
+        // Start Service Action
+        val startIntent = Intent(this, NavigationService::class.java).apply {
+            action = ACTION_START_SERVICE
         }
-        val disconnectPendingIntent = PendingIntent.getService(
+        val startPendingIntent = PendingIntent.getService(
             this,
             2,
-            disconnectIntent,
+            startIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
@@ -164,7 +194,7 @@ class NavigationService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .addAction(R.drawable.ic_launcher_foreground, "Stop", stopPendingIntent)
-            .addAction(R.drawable.ic_launcher_foreground, "Disconnect", disconnectPendingIntent)
+            .addAction(R.drawable.ic_launcher_foreground, "Start", startPendingIntent)
             .build()
     }
     

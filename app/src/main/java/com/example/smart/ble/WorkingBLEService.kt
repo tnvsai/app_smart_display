@@ -25,6 +25,7 @@ import com.example.smart.model.Direction
 import com.example.smart.model.NavigationData
 import com.example.smart.model.PhoneCallData
 import com.example.smart.model.CallState
+import com.example.smart.notification.NotificationListenerService
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +64,9 @@ class WorkingBLEService(private val context: Context) {
     // Store only the latest data (no queue - we only need current navigation info)
     private var lastNavigationData: NavigationData? = null
     private var lastPhoneCallData: PhoneCallData? = null
+    // Track what was last successfully sent to MCU (for change detection)
+    private var lastSentNavigationData: NavigationData? = null
+    private var lastSentPhoneCallData: PhoneCallData? = null
     private val handler = Handler(Looper.getMainLooper())
     private val gson = Gson()
     
@@ -330,24 +334,32 @@ class WorkingBLEService(private val context: Context) {
     
     @SuppressLint("MissingPermission")
     fun sendNavigationData(navigationData: NavigationData) {
+        Log.i(TAG, "=== SENDING NAVIGATION DATA ===")
+        Log.i(TAG, "Data: $navigationData")
+        
+        // Store latest data
+        lastNavigationData = navigationData
+        
+        // Check if data has actually changed
+        if (lastSentNavigationData != null && isDataEqual(lastSentNavigationData!!, navigationData)) {
+            Log.d(TAG, "⏭ Skipped duplicate navigation data (no changes)")
+            return
+        }
+        
+        if (!isConnected || navigationCharacteristic == null) {
+            Log.w(TAG, "Not connected - storing for later send")
+            return
+        }
+        
         // Add transmission log
         val timestamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
         val logMessage = "[$timestamp] TX: dir=${navigationData.direction?.name}, dist=${navigationData.distance}, man=${navigationData.maneuver}"
         Log.i(TAG, logMessage)
         _transmissionLog.value = (_transmissionLog.value + logMessage).takeLast(50)
         
-        Log.i(TAG, "=== SENDING NAVIGATION DATA ===")
-        Log.i(TAG, "Data: $navigationData")
+        Log.i(TAG, "✅ Sending changed navigation data")
         Log.i(TAG, "isConnected: $isConnected")
         Log.i(TAG, "navigationCharacteristic: $navigationCharacteristic")
-        
-        // Store latest data instead of queuing
-        lastNavigationData = navigationData
-        
-        if (!isConnected || navigationCharacteristic == null) {
-            Log.w(TAG, "Not connected - storing for later send")
-            return
-        }
         
         try {
             // Format data as JSON for flexibility
@@ -419,7 +431,12 @@ class WorkingBLEService(private val context: Context) {
             
             if (writeResult == true) {
                 Log.i(TAG, "✅ Data sent successfully!")
+                lastSentNavigationData = navigationData // Mark as sent
                 updateStats(true)
+                
+                // Log to debug console (only after successful send)
+                val debugMessage = "Google Maps: ${navigationData.direction?.name} - ${navigationData.distance}"
+                NotificationListenerService.debugLogCallback?.invoke(debugMessage)
             } else {
                 Log.e(TAG, "❌ Failed to send data")
                 updateStats(false)
@@ -434,10 +451,35 @@ class WorkingBLEService(private val context: Context) {
      * Send phone call data to ESP32
      */
     fun sendPhoneCallData(phoneCallData: PhoneCallData) {
-        // Store latest data instead of queuing
+        Log.i(TAG, "=== SENDING PHONE CALL DATA ===")
+        Log.i(TAG, "Data: $phoneCallData")
+        
+        // Store latest data
         lastPhoneCallData = phoneCallData
         
-        if (!isConnected) {
+        // Check if data has actually changed (except ENDED and MISSED states which should always be sent)
+        Log.i(TAG, "DEBUG: Checking phone call change detection...")
+        Log.i(TAG, "DEBUG: Call state: ${phoneCallData.callState}")
+        Log.i(TAG, "DEBUG: Last sent: $lastSentPhoneCallData")
+        Log.i(TAG, "DEBUG: Is ENDED: ${phoneCallData.callState == CallState.ENDED}")
+        Log.i(TAG, "DEBUG: Is MISSED: ${phoneCallData.callState == CallState.MISSED}")
+        Log.i(TAG, "DEBUG: Last sent is null: ${lastSentPhoneCallData == null}")
+        
+        // Always send ENDED and MISSED calls regardless of deduplication
+        if (phoneCallData.callState != CallState.ENDED && 
+            phoneCallData.callState != CallState.MISSED &&
+            lastSentPhoneCallData != null) {
+            val isEqual = isPhoneCallDataEqual(lastSentPhoneCallData!!, phoneCallData)
+            Log.i(TAG, "DEBUG: Data is equal: $isEqual")
+            if (isEqual) {
+                Log.w(TAG, "⏭ Skipped duplicate phone call data (no changes)")
+                return
+            }
+        }
+        
+        Log.i(TAG, "DEBUG: Proceeding with phone call data transmission")
+        
+        if (!isConnected || navigationCharacteristic == null) {
             Log.w(TAG, "Not connected - storing for later send")
             return
         }
@@ -455,6 +497,7 @@ class WorkingBLEService(private val context: Context) {
             val dataString = gson.toJson(jsonData)
             val data = dataString.toByteArray()
             
+            Log.i(TAG, "✅ Sending changed phone call data")
             Log.i(TAG, "=== BLE PHONE CALL DATA TRANSMISSION DEBUG ===")
             Log.i(TAG, "Original PhoneCallData: $phoneCallData")
             Log.i(TAG, "JSON data: $dataString")
@@ -467,7 +510,12 @@ class WorkingBLEService(private val context: Context) {
             
             if (writeResult == true) {
                 Log.i(TAG, "✅ Phone call data sent successfully!")
+                lastSentPhoneCallData = phoneCallData // Mark as sent
                 updateStats(true)
+                
+                // Log to debug console (only after successful send)
+                val debugMessage = "Phone: ${phoneCallData.callerName} - ${phoneCallData.callState.displayName}"
+                NotificationListenerService.debugLogCallback?.invoke(debugMessage)
             } else {
                 Log.e(TAG, "❌ Failed to send phone call data")
                 updateStats(false)
@@ -536,6 +584,11 @@ class WorkingBLEService(private val context: Context) {
         Log.i(TAG, "Sending latest data if connected...")
         
         if (isConnected && navigationCharacteristic != null) {
+            // CRITICAL FIX: Clear sent data to force re-send when connecting
+            // This ensures existing navigation data is sent when app starts while navigation is already running
+            lastSentNavigationData = null
+            lastSentPhoneCallData = null
+            
             lastNavigationData?.let {
                 Log.i(TAG, "Sending latest navigation data")
                 sendNavigationData(it)
@@ -562,6 +615,11 @@ class WorkingBLEService(private val context: Context) {
         
         isConnected = false
         navigationCharacteristic = null
+        
+        // CRITICAL FIX: Clear sent data so it will be re-sent on reconnection
+        lastSentNavigationData = null
+        lastSentPhoneCallData = null
+        
         _connectionStatus.value = BLEConnectionStatus(
             isConnected = false,
             deviceName = null,
@@ -632,5 +690,25 @@ class WorkingBLEService(private val context: Context) {
         } else {
             Log.i(TAG, "Not connected, skipping")
         }
+    }
+    
+    /**
+     * Check if two NavigationData objects are equal (for change detection)
+     */
+    private fun isDataEqual(old: NavigationData, new: NavigationData): Boolean {
+        return old.direction == new.direction &&
+               old.distance == new.distance &&
+               old.maneuver == new.maneuver &&
+               old.eta == new.eta
+    }
+    
+    /**
+     * Check if two PhoneCallData objects are equal (for change detection)
+     * Check caller info AND call state to prevent duplicate INCOMING notifications
+     */
+    private fun isPhoneCallDataEqual(old: PhoneCallData, new: PhoneCallData): Boolean {
+        return old.callerName == new.callerName &&
+               old.callerNumber == new.callerNumber &&
+               old.callState == new.callState
     }
 }

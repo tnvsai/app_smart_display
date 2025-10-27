@@ -81,6 +81,8 @@ String currentCallerNumber = "";
 unsigned long callStartTime = 0;
 unsigned long missedCallTime = 0;
 String currentCallState = "";
+unsigned long phoneCallDisplayStartTime = 0;  // Track when call display started
+#define MIN_PHONE_CALL_DISPLAY_TIME 5000  // Minimum 5 seconds for phone call display
 
 // Navigation state before phone call
 bool wasNavigationActive = false;
@@ -88,6 +90,20 @@ String savedDirection = "";
 int savedDistance = 0;
 String savedManeuver = "";
 String savedETA = "";
+
+// Persistent missed call tracking
+struct MissedCallInfo {
+    String callerName;
+    String callerNumber;
+    int count;
+    unsigned long firstMissedTime;
+    bool acknowledged;  // User tapped to dismiss
+};
+MissedCallInfo persistentMissedCall = {"", "", 0, 0, false};
+unsigned long lastMissedCallReminderTime = 0;
+#define MISSED_CALL_REMINDER_INTERVAL 60000  // Show reminder every 60 seconds
+#define INITIAL_MISSED_CALL_DISPLAY_TIME 10000  // Show missed call for 10 seconds initially
+#define REMINDER_DISPLAY_TIME 5000  // Show reminder for 5 seconds
 
 // ==== LCD Register Init ====
 void lcd_reg_init(void) {
@@ -493,35 +509,43 @@ void displayIncomingCall(String name, String number) {
     currentCallState = "INCOMING";
     callStartTime = millis();
     
-    // Clear screen
+    // Clear screen completely
     gfx->fillScreen(COLOR_BLACK);
     
-    // Header
-    gfx->setCursor(10, 20);
-    gfx->setTextColor(COLOR_GREEN);
-    gfx->setTextSize(1);
-    gfx->print("📞 INCOMING CALL");
+    Serial.println("[CALL] Drawing incoming call screen...");
     
-    // Caller name (large)
-    gfx->setCursor(10, 80);
+    // Header - RED background box for visibility
+    gfx->fillRect(0, 0, SCREEN_WIDTH, 35, COLOR_RED);
+    gfx->setCursor(10, 12);
     gfx->setTextColor(COLOR_WHITE);
+    gfx->setTextSize(1);
+    gfx->print("INCOMING CALL");
+    
+    // Caller name (large, centered)
+    gfx->setCursor(10, 60);
+    gfx->setTextColor(COLOR_GREEN);
     gfx->setTextSize(2);
     gfx->print(name);
     
-    // Phone number (medium)
-    gfx->setCursor(10, 120);
-    gfx->setTextColor(COLOR_GRAY);
-    gfx->setTextSize(1);
-    gfx->print(number);
+    // Phone number (medium) - only show if not "Unknown"
+    if (number != "Unknown" && number.length() > 0) {
+        gfx->setCursor(10, 100);
+        gfx->setTextColor(COLOR_WHITE);
+        gfx->setTextSize(1);
+        gfx->print(number);
+    }
     
-    // Ringing animation dots
+    // Ringing animation dots (centered)
     drawRingingAnimation();
     
-    // Dismiss instruction
-    gfx->setCursor(10, 280);
-    gfx->setTextColor(COLOR_YELLOW);
+    // Dismiss instruction (at bottom)
+    gfx->fillRect(0, 285, SCREEN_WIDTH, 35, COLOR_YELLOW);
+    gfx->setCursor(10, 295);
+    gfx->setTextColor(COLOR_BLACK);
     gfx->setTextSize(1);
-    gfx->print("[TAP TO REJECT CALL]");
+    gfx->print("TAP TO REJECT");
+    
+    Serial.println("[CALL] Incoming call screen drawn");
 }
 
 void displayOngoingCall(String name, int duration) {
@@ -599,11 +623,13 @@ void displayMissedCall(String name, String number, int count) {
     gfx->setTextSize(2);
     gfx->print(name);
     
-    // Phone number
-    gfx->setCursor(10, 140);
-    gfx->setTextColor(COLOR_GRAY);
-    gfx->setTextSize(1);
-    gfx->print(number);
+    // Phone number - only show if not "Unknown"
+    if (number != "Unknown" && number.length() > 0) {
+        gfx->setCursor(10, 140);
+        gfx->setTextColor(COLOR_GRAY);
+        gfx->setTextSize(1);
+        gfx->print(number);
+    }
     
     // Time since call
     gfx->setCursor(10, 180);
@@ -722,6 +748,15 @@ void handlePhoneCallTouch(int x, int y) {
         if (currentCallState == "INCOMING") {
             Serial.println("[CALL] Rejected by user");
             displayMissedCall(currentCallerName, currentCallerNumber, 1);
+        } else if (currentCallState == "MISSED" || isMissedCallShowing) {
+            // User acknowledged missed call - mark as acknowledged and clear
+            Serial.println("[CALL] Missed call acknowledged by user");
+            persistentMissedCall.acknowledged = true;
+            persistentMissedCall.callerName = "";
+            persistentMissedCall.callerNumber = "";
+            persistentMissedCall.count = 0;
+            persistentMissedCall.firstMissedTime = 0;
+            clearPhoneDisplay();
         } else {
             Serial.println("[CALL] Dismissed by user");
             clearPhoneDisplay();
@@ -745,14 +780,31 @@ class MyServerCallbacks : public BLEServerCallbacks {
 
 class MyCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pChar) {
+        Serial.println("\n=== onWrite CALLBACK TRIGGERED ===");
+        Serial.flush();
+        
         String value = pChar->getValue();
+        Serial.print("Value length: ");
+        Serial.println(value.length());
+        Serial.flush();
+        
         if (value.length() > 0) {
             Serial.print("Received: ");
             Serial.println(value);
+            Serial.flush();
             
             StaticJsonDocument<256> doc;
-            if (deserializeJson(doc, value) == DeserializationError::Ok) {
+            DeserializationError error = deserializeJson(doc, value);
+            
+            Serial.print("JSON parse error: ");
+            Serial.println(error.c_str());
+            Serial.flush();
+            
+            if (error == DeserializationError::Ok) {
                 const char* type = doc["type"];
+                Serial.print("Message type: ");
+                Serial.println(type ? type : "NULL");
+                Serial.flush();
                 
                 if (strcmp(type, "phone_call") == 0) {
                     // Handle phone call data
@@ -762,47 +814,117 @@ class MyCallbacks : public BLECharacteristicCallbacks {
                     int duration = doc["duration"] | 0;
                     
                     if (DEBUG_CALLS) {
-                        Serial.printf("[CALL] %s from %s (%s)\n", callState, callerName, callerNumber);
+                        Serial.printf("[CALL] Type=%s, State=%s, Name=%s, Number=%s\n", type, callState, callerName, callerNumber);
                     }
                     
+                    Serial.printf("[DEBUG] Comparing callState='%s' with 'INCOMING' = %d\n", callState, strcmp(callState, "INCOMING"));
+                    
                     if (strcmp(callState, "INCOMING") == 0) {
-                        displayIncomingCall(String(callerName ? callerName : "Unknown"), String(callerNumber ? callerNumber : ""));
+                        // Don't override MISSED state with INCOMING - prioritize missed calls
+                        if (!isMissedCallShowing) {
+                            Serial.println("[CALL] Displaying INCOMING call");
+                            phoneCallDisplayStartTime = millis();  // Track display start time
+                            displayIncomingCall(String(callerName ? callerName : "Unknown"), String(callerNumber ? callerNumber : ""));
+                        } else {
+                            Serial.println("[CALL] INCOMING ignored - missed call is showing");
+                        }
                     } else if (strcmp(callState, "ONGOING") == 0) {
+                        phoneCallDisplayStartTime = millis();  // Track display start time
                         displayOngoingCall(String(callerName ? callerName : "Unknown"), duration);
                     } else if (strcmp(callState, "MISSED") == 0) {
                         String name = currentCallerName.length() > 0 ? currentCallerName : String(callerName ? callerName : "Unknown");
                         String number = currentCallerNumber.length() > 0 ? currentCallerNumber : String(callerNumber ? callerNumber : "");
-                        displayMissedCall(name, number, 1);
+                        
+                        // Store persistent missed call info (increment count if same number, replace if different)
+                        if (persistentMissedCall.callerNumber == String(number)) {
+                            persistentMissedCall.count++;
+                        } else {
+                            persistentMissedCall.callerName = name;
+                            persistentMissedCall.callerNumber = number;
+                            persistentMissedCall.count = 1;
+                        }
+                        persistentMissedCall.firstMissedTime = millis();
+                        persistentMissedCall.acknowledged = false;
+                        // Initialize reminder timer for first time
+                        lastMissedCallReminderTime = 0;
+                        
+                        displayMissedCall(name, number, persistentMissedCall.count);
                     } else if (strcmp(callState, "ENDED") == 0) {
+                        // Call ended - just restore navigation
+                        // Note: Android app will send MISSED state separately if call was missed
+                        Serial.println("[CALL] Call ended - restoring navigation");
                         clearPhoneDisplay();
                     }
                 } else {
-                    // Handle navigation data
+                    // Handle navigation data - ALWAYS UPDATE SAVED STATE, BUT ONLY REDRAW IF NO CALL
                     const char* dir = doc["direction"];
                     int dist = doc["distance"];
                     const char* man = doc["maneuver"];
                     const char* eta = doc["eta"];
                     
+                    String newDirection = String(dir ? dir : "");
+                    
                     if (DEBUG_NAVIGATION) {
                         Serial.printf("[NAV] dir=%s, dist=%d, man=%s, eta=%s\n", dir, dist, man, eta);
                     }
                     
+                    // ALWAYS update both current AND saved state (silently during calls)
                     currentDirection = String(dir ? dir : "");
                     currentDistance = dist;
                     currentManeuver = String(man ? man : "");
                     currentETA = String(eta ? eta : "");
+                    
+                    savedDirection = currentDirection;
+                    savedDistance = currentDistance;
+                    savedManeuver = currentManeuver;
+                    savedETA = currentETA;
+                    wasNavigationActive = true;
                     
                     if (DEBUG_NAVIGATION) {
                         Serial.printf("[NAV] Stored state - dir:%s, dist:%d, man:%s, eta:%s\n", 
                                       currentDirection.c_str(), currentDistance, currentManeuver.c_str(), currentETA.c_str());
                     }
                     
-                    drawArrow(currentDirection);
-                    displayDistance(currentDistance);
-                    displayManeuver(currentManeuver);
+                    // Check if direction changed during active call (for visual alert)
+                    bool isDirectionChange = (newDirection != currentDirection);
+                    if (isPhoneCallActive && isDirectionChange) {
+                        Serial.println("[NAV] Direction changed during call - flashing border");
+                        // Flash border to alert user
+                        for (int i = 0; i < 2; i++) {
+                            gfx->drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_YELLOW);
+                            gfx->drawRect(1, 1, SCREEN_WIDTH-2, SCREEN_HEIGHT-2, COLOR_YELLOW);
+                            delay(150);
+                            // Redraw current call screen
+                            displayIncomingCall(currentCallerName, currentCallerNumber);
+                            delay(150);
+                        }
+                    }
                     
-                    if (eta) {
-                        displayETA(currentETA);
+                    // Check if it's a critical navigation update (distance < 100m and direction changed)
+                    bool isCriticalNav = (dist < 100 && isDirectionChange);
+                    if (isPhoneCallActive && isCriticalNav) {
+                        Serial.println("[NAV] Critical update during call - showing alert banner");
+                        // Show alert banner at bottom
+                        gfx->fillRect(0, SCREEN_HEIGHT-50, SCREEN_WIDTH, 50, COLOR_RED);
+                        gfx->setCursor(10, SCREEN_HEIGHT-35);
+                        gfx->setTextColor(COLOR_WHITE);
+                        gfx->setTextSize(2);
+                        gfx->print(String(dir) + " " + String(dist) + "m");
+                        delay(3000);
+                        // Redraw call display
+                        displayIncomingCall(currentCallerName, currentCallerNumber);
+                    }
+                    
+                    // Only redraw navigation if no call is active
+                    if (!isPhoneCallActive && !isMissedCallShowing) {
+                        // Clear screen and redraw full navigation
+                        gfx->fillScreen(COLOR_BLACK);
+                        displayStatus("CONNECTED", COLOR_GREEN);
+                        
+                        if (currentETA.length() > 0) displayETA(currentETA);
+                        if (currentManeuver.length() > 0) displayManeuver(currentManeuver, true);
+                        if (currentDirection.length() > 0) drawArrow(currentDirection);
+                        if (currentDistance > 0) displayDistance(currentDistance);
                     }
                 }
             }
@@ -900,6 +1022,30 @@ void loop() {
             displayMissedCall(currentCallerName, currentCallerNumber, 1);
         } else {
             drawRingingAnimation();
+        }
+    }
+    
+    // Periodic missed call reminder (if not acknowledged and timeout passed)
+    if (!persistentMissedCall.acknowledged && persistentMissedCall.count > 0) {
+        unsigned long currentTime = millis();
+        
+        // Check if initial display time has passed (10 seconds) OR if already in reminder mode (lastMissedCallReminderTime > 0)
+        if (currentTime - persistentMissedCall.firstMissedTime > INITIAL_MISSED_CALL_DISPLAY_TIME || lastMissedCallReminderTime > 0) {
+            // Now show periodic reminders every 60 seconds
+            if (currentTime - lastMissedCallReminderTime > MISSED_CALL_REMINDER_INTERVAL) {
+                // Briefly show missed call notification (5 seconds), then restore navigation
+                if (DEBUG_CALLS) {
+                    Serial.printf("[CALL] Showing missed call reminder: %s (%d times)\n", 
+                                  persistentMissedCall.callerName.c_str(), persistentMissedCall.count);
+                }
+                
+                displayMissedCall(persistentMissedCall.callerName, 
+                                  persistentMissedCall.callerNumber, 
+                                  persistentMissedCall.count);
+                delay(REMINDER_DISPLAY_TIME);
+                clearPhoneDisplay();  // This restores navigation
+                lastMissedCallReminderTime = currentTime;  // Update to current time after delay
+            }
         }
     }
     
