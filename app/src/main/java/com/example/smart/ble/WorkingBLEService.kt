@@ -60,8 +60,9 @@ class WorkingBLEService(private val context: Context) {
     private var isScanning = false
     private var isConnected = false
     
-    private val messageQueue = mutableListOf<NavigationData>()
-    private val phoneCallQueue = mutableListOf<PhoneCallData>()
+    // Store only the latest data (no queue - we only need current navigation info)
+    private var lastNavigationData: NavigationData? = null
+    private var lastPhoneCallData: PhoneCallData? = null
     private val handler = Handler(Looper.getMainLooper())
     private val gson = Gson()
     
@@ -95,8 +96,7 @@ class WorkingBLEService(private val context: Context) {
     data class BLEConnectionStatus(
         val isConnected: Boolean = false,
         val deviceName: String? = null,
-        val deviceAddress: String? = null,
-        val queuedMessages: Int = 0
+        val deviceAddress: String? = null
     )
     
     data class TransmissionStats(
@@ -157,8 +157,7 @@ class WorkingBLEService(private val context: Context) {
                         _connectionStatus.value = BLEConnectionStatus(
                             isConnected = true,
                             deviceName = deviceName,
-                            deviceAddress = deviceAddress,
-                            queuedMessages = messageQueue.size
+                            deviceAddress = deviceAddress
                         )
                         
                         // Add to connection history
@@ -187,8 +186,7 @@ class WorkingBLEService(private val context: Context) {
                     _connectionStatus.value = BLEConnectionStatus(
                         isConnected = false,
                         deviceName = null,
-                        deviceAddress = null,
-                        queuedMessages = messageQueue.size
+                        deviceAddress = null
                     )
                 }
             }
@@ -219,8 +217,8 @@ class WorkingBLEService(private val context: Context) {
                         Log.i(TAG, "Supports WRITE: ${(properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0}")
                         Log.i(TAG, "🎉 READY TO SEND DATA!")
                         
-                        // Process any queued messages
-                        processQueuedMessages()
+                        // Send latest data if available
+                        sendLatestDataIfConnected()
                     } else {
                         Log.e(TAG, "❌ Target characteristic not found")
                     }
@@ -343,11 +341,11 @@ class WorkingBLEService(private val context: Context) {
         Log.i(TAG, "isConnected: $isConnected")
         Log.i(TAG, "navigationCharacteristic: $navigationCharacteristic")
         
+        // Store latest data instead of queuing
+        lastNavigationData = navigationData
+        
         if (!isConnected || navigationCharacteristic == null) {
-            Log.w(TAG, "Not ready to send - queuing message")
-            messageQueue.add(navigationData)
-            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
-            updateStats(false)
+            Log.w(TAG, "Not connected - storing for later send")
             return
         }
         
@@ -424,14 +422,10 @@ class WorkingBLEService(private val context: Context) {
                 updateStats(true)
             } else {
                 Log.e(TAG, "❌ Failed to send data")
-                messageQueue.add(navigationData)
-                _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
                 updateStats(false)
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error sending data: ${e.message}")
-            messageQueue.add(navigationData)
-            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size)
             updateStats(false)
         }
     }
@@ -440,10 +434,11 @@ class WorkingBLEService(private val context: Context) {
      * Send phone call data to ESP32
      */
     fun sendPhoneCallData(phoneCallData: PhoneCallData) {
+        // Store latest data instead of queuing
+        lastPhoneCallData = phoneCallData
+        
         if (!isConnected) {
-            Log.w(TAG, "Not connected, queuing phone call data")
-            phoneCallQueue.add(phoneCallData)
-            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
+            Log.w(TAG, "Not connected - storing for later send")
             return
         }
         
@@ -475,14 +470,10 @@ class WorkingBLEService(private val context: Context) {
                 updateStats(true)
             } else {
                 Log.e(TAG, "❌ Failed to send phone call data")
-                phoneCallQueue.add(phoneCallData)
-                _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
                 updateStats(false)
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error sending phone call data: ${e.message}")
-            phoneCallQueue.add(phoneCallData)
-            _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
             updateStats(false)
         }
     }
@@ -541,22 +532,22 @@ class WorkingBLEService(private val context: Context) {
     }
     
     @SuppressLint("MissingPermission")
-    private fun processQueuedMessages() {
-        Log.i(TAG, "Processing ${messageQueue.size} queued navigation messages and ${phoneCallQueue.size} queued phone call messages...")
+    private fun sendLatestDataIfConnected() {
+        Log.i(TAG, "Sending latest data if connected...")
         
-        // Process navigation messages
-        while (messageQueue.isNotEmpty() && isConnected && navigationCharacteristic != null) {
-            val message = messageQueue.removeAt(0)
-            sendNavigationData(message)
+        if (isConnected && navigationCharacteristic != null) {
+            lastNavigationData?.let {
+                Log.i(TAG, "Sending latest navigation data")
+                sendNavigationData(it)
+            }
+            
+            lastPhoneCallData?.let {
+                Log.i(TAG, "Sending latest phone call data")
+                sendPhoneCallData(it)
+            }
+        } else {
+            Log.d(TAG, "Not connected, skipping")
         }
-        
-        // Process phone call messages
-        while (phoneCallQueue.isNotEmpty() && isConnected && navigationCharacteristic != null) {
-            val phoneCall = phoneCallQueue.removeAt(0)
-            sendPhoneCallData(phoneCall)
-        }
-        
-        _connectionStatus.value = _connectionStatus.value.copy(queuedMessages = messageQueue.size + phoneCallQueue.size)
     }
     
     @SuppressLint("MissingPermission")
@@ -574,8 +565,7 @@ class WorkingBLEService(private val context: Context) {
         _connectionStatus.value = BLEConnectionStatus(
             isConnected = false,
             deviceName = null,
-            deviceAddress = null,
-            queuedMessages = messageQueue.size + phoneCallQueue.size
+            deviceAddress = null
         )
         Log.i(TAG, "Disconnected")
     }
@@ -610,8 +600,7 @@ class WorkingBLEService(private val context: Context) {
         _connectionStatus.value = BLEConnectionStatus(
             isConnected = isConnected,
             deviceName = bluetoothGatt?.device?.name ?: "ESP32_BLE",
-            deviceAddress = bluetoothGatt?.device?.address,
-            queuedMessages = messageQueue.size
+            deviceAddress = bluetoothGatt?.device?.address
         )
         
         Log.i(TAG, "Updated connection status: ${_connectionStatus.value}")
@@ -631,16 +620,17 @@ class WorkingBLEService(private val context: Context) {
     }
     
     fun forceProcessQueuedMessages() {
-        Log.i(TAG, "=== FORCING PROCESS QUEUED MESSAGES ===")
-        Log.i(TAG, "Queued messages: ${messageQueue.size}")
+        // This method is kept for compatibility but now just sends latest data
+        Log.i(TAG, "=== SENDING LATEST DATA ===")
         Log.i(TAG, "isConnected: $isConnected")
         Log.i(TAG, "navigationCharacteristic: $navigationCharacteristic")
         
-        if (messageQueue.isNotEmpty()) {
-            Log.i(TAG, "Processing ${messageQueue.size} queued messages...")
-            processQueuedMessages()
+        if (isConnected && navigationCharacteristic != null) {
+            Log.i(TAG, "Sending latest data...")
+            lastNavigationData?.let { sendNavigationData(it) }
+            lastPhoneCallData?.let { sendPhoneCallData(it) }
         } else {
-            Log.i(TAG, "No queued messages to process")
+            Log.i(TAG, "Not connected, skipping")
         }
     }
 }

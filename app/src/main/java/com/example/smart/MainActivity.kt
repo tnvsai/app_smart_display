@@ -512,20 +512,6 @@ fun NavigationApp(
                             }
                         }
                         
-                        if (connectionStatus.queuedMessages > 0) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Queue", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    text = "${connectionStatus.queuedMessages} messages",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color(0xFFFFA500)
-                                )
-                            }
-                        }
                         
                         if (isScanning) {
                             Row(
