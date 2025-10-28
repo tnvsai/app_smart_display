@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "smart"
+rootProject.name = "YatraMate"
 include(":app")
  

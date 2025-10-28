@@ -1,135 +1,316 @@
-# Navigation Monitor Android App
+# YatraMate
 
-A complete Android app that reads live Google Maps navigation notifications and sends the relevant navigation data (direction, distance, maneuver) via BLE to an ESP32 or similar microcontroller.
+**YatraMate** is a comprehensive Android application that integrates with an ESP32-based smart display to provide real-time navigation guidance and phone call notifications while driving. The app monitors Google Maps navigation and phone calls through Android notifications and transmits this data via Bluetooth Low Energy (BLE) to a companion ESP32 display unit.
+
+**By tnvsai**
 
 ## Features
 
-- **Real-time Notification Monitoring**: Captures Google Maps navigation notifications using NotificationListenerService
-- **Smart Data Parsing**: Extracts direction, distance, and maneuver information from notification text
-- **BLE Communication**: Connects to ESP32 devices and sends navigation data via Bluetooth Low Energy
-- **Message Queuing**: Queues messages when BLE device is disconnected and flushes when reconnected
-- **Manual Input**: Allows manual entry of navigation data for testing
-- **Permission Management**: Handles all Android 12+ runtime permissions
-- **Foreground Service**: Keeps the app running in background for continuous monitoring
-- **Modern UI**: Clean Material Design 3 interface with real-time status updates
+### 🗺️ Navigation Monitoring
+- Real-time parsing of Google Maps navigation notifications
+- Displays turn-by-turn directions with arrows
+- Shows distance to next maneuver and ETA
+- Updates live as navigation progresses
 
-## Requirements
+### 📞 Phone Call Management
+- Detects incoming, outgoing, missed, and ongoing calls
+- Displays caller information (name and number)
+- Missed call reminders with periodic notifications
+- Smart call state detection with deduplication
+- Call animations on the ESP32 display
 
-- Android 11+ (API 30+)
-- Kotlin
-- BLE-capable device
-- ESP32 or similar microcontroller with BLE support
+### 🔵 Bluetooth Low Energy (BLE)
+- Stable BLE communication between Android device and ESP32
+- Automatic connection management and reconnection
+- Real-time data transmission with efficient deduplication
+- Connection status monitoring
 
-## Permissions
+### 🎨 Modern Material3 UI
+- Clean, modern interface following Google's Material Design 3
+- Dark mode support
+- Tabbed navigation (Home and Developer tabs)
+- Real-time connection status indicators
+- Recent activity log
 
-The app requires the following permissions:
+### 🧑‍💻 Developer Tools
+- Manual JSON transmission for testing
+- Key-value pair builder with smart type conversion
+- Comprehensive debug logs (Navigation History, Call History, System Log)
+- Clear all functionality for logs
 
-- `BLUETOOTH_SCAN` - For scanning BLE devices
-- `BLUETOOTH_CONNECT` - For connecting to BLE devices
-- `BLUETOOTH_ADVERTISE` - For BLE advertising
-- `ACCESS_FINE_LOCATION` - Required for BLE scanning
-- `ACCESS_COARSE_LOCATION` - Required for BLE scanning
-- `POST_NOTIFICATIONS` - For displaying app notifications
-- `BIND_NOTIFICATION_LISTENER_SERVICE` - For accessing system notifications
-- `FOREGROUND_SERVICE` - For background service
-- `WAKE_LOCK` - For background processing
+## Hardware Requirements
 
-## ESP32 Setup
+### ESP32 Display Unit
+- ESP32 development board
+- Display: 172x320 ST7789 TFT LCD
+- Touch screen (AXS5106L) with I2C interface
+- Required connections:
+  - Display: SPI bus (DC: GPIO15, CS: GPIO14, SCK: GPIO1, MOSI: GPIO2, RST: GPIO22, BL: GPIO23)
+  - Touch: I2C bus (SDA: GPIO18, SCL: GPIO19, RST: GPIO20, INT: GPIO21)
 
-To use this app with an ESP32, you need to:
+### Android Device
+- Android 8.0 (API 26) or higher
+- Bluetooth 4.0+ support
+- Google Maps installed for navigation features
 
-1. **Set up BLE service** with the following UUIDs:
-   - Service UUID: `12345678-1234-1234-1234-1234567890ab`
-   - Characteristic UUID: `abcd1234-5678-90ab-cdef-1234567890ab`
+## Software Setup
 
-2. **Configure device name** as "ESP32_BLE"
+### Android App Installation
 
-3. **Handle incoming data** in pipe-separated format:
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd YatraMate
    ```
-   direction|distance|maneuver
+
+2. Open the project in Android Studio (latest version recommended)
+
+3. Ensure you have the following installed:
+   - Android SDK Build-Tools
+   - Android SDK Platform (API 36)
+   - Gradle 8.0+
+
+4. Build and run:
+   ```bash
+   ./gradlew assembleDebug
    ```
-   Where:
-   - `direction`: "left", "right", "straight", or "uturn"
-   - `distance`: integer value in meters
-   - `maneuver`: text description (e.g., "roundabout", "exit")
 
-## Installation
+5. Install on your Android device:
+   ```bash
+   adb install app/build/outputs/apk/debug/app-debug.apk
+   ```
 
-1. Clone the repository
-2. Open in Android Studio
-3. Build and install on your Android device
-4. Grant all required permissions when prompted
-5. Enable notification access in system settings
+### ESP32 Firmware Installation
+
+1. Install PlatformIO:
+   - Install PlatformIO IDE or PlatformIO Core
+   - Reference: https://platformio.org/install
+
+2. Open the firmware project:
+   ```bash
+   cd ardunio_files
+   ```
+
+3. Build and upload:
+   ```bash
+   pio run -t upload
+   ```
+
+4. Monitor serial output:
+   ```bash
+   pio device monitor
+   ```
+
+## Initial Setup
+
+### Android Permissions
+
+After installing the app, grant the following permissions:
+
+1. **Bluetooth Permissions** (automatically requested):
+   - Bluetooth, Bluetooth Admin, Bluetooth Scan, Bluetooth Connect, Bluetooth Advertise
+
+2. **Location Permissions** (automatically requested):
+   - Fine Location, Coarse Location
+
+3. **Notification Access** (manual setup required):
+   - Go to: Settings → Apps → YatraMate → Special Access → Notification Access
+   - Enable notification access for YatraMate
+
+4. **Battery Optimization** (recommended):
+   - Go to: Settings → Apps → YatraMate → Battery
+   - Set to "Unrestricted" to ensure continuous background operation
+
+### ESP32 Connection
+
+1. Power on the ESP32 display
+2. Note the BLE device name (displayed on the ESP32 serial monitor)
+3. Open YatraMate app on your Android device
+4. Click "Start Service" on the Home tab
+5. The app will automatically scan and connect to the ESP32 device
+6. Connection status will show "Connected" once paired
 
 ## Usage
 
-1. **Start the app** and grant all permissions
-2. **Connect ESP32** - The app will automatically scan for "ESP32_BLE" devices
-3. **Start navigation** in Google Maps
-4. **Monitor status** - The app will show connection status and queued messages
-5. **Manual testing** - Use the manual input section to test BLE communication
+### Navigation Display
 
-## Architecture
+1. Start Google Maps navigation on your Android device
+2. YatraMate will automatically detect navigation notifications
+3. The ESP32 display will show:
+   - Direction arrows (Left, Right, Straight, U-turn, etc.)
+   - Distance to next maneuver
+   - Turn direction text
+   - Estimated time of arrival (ETA)
 
-### Core Components
+### Phone Call Display
 
-- **MainActivity**: Main UI with permission handling and service control
-- **NavigationService**: Foreground service for background monitoring
-- **NotificationListenerService**: Captures Google Maps notifications
-- **NotificationParser**: Extracts navigation data from notification text
-- **BLEService**: Handles BLE scanning, connection, and communication
-- **PermissionHandler**: Manages Android 12+ runtime permissions
+1. When a call is received or placed, YatraMate intercepts the notification
+2. The ESP32 display shows:
+   - Incoming calls: "INCOMING CALL" with caller info
+   - Outgoing calls: "CALLING..." with recipient info
+   - Missed calls: "MISSED CALL" with periodic reminders
+3. Navigation data will not interrupt call displays for at least 5 seconds
+4. Tap the display to dismiss missed call reminders
 
-### Data Flow
+### Developer Features
 
-1. Google Maps sends navigation notification
-2. NotificationListenerService captures the notification
-3. NotificationParser extracts navigation data
-4. BLEService formats data as "direction|distance|maneuver" and sends to ESP32 via BLE
-5. ESP32 displays the navigation information on the LCD screen
-6. If disconnected, messages are queued and sent when reconnected
+1. **Manual Send**: Test BLE communication by sending custom JSON data
+2. **Navigation History**: View all parsed Google Maps notifications
+3. **Call History**: View all detected phone call events with parsed data
+4. **System Log**: Monitor all BLE operations and data transmissions
 
-## Customization
+## Project Structure
 
-### BLE Configuration
+```
+YatraMate/
+├── app/
+│   ├── src/main/java/com/tnvsai/yatramate/
+│   │   ├── MainActivity.kt              # Main UI and user interface
+│   │   ├── ble/
+│   │   │   ├── WorkingBLEService.kt     # BLE connection management
+│   │   │   └── BLEConstants.kt          # BLE configuration constants
+│   │   ├── notification/
+│   │   │   ├── NotificationListenerService.kt  # Notification interception
+│   │   │   ├── NotificationParser.kt    # Google Maps parsing
+│   │   │   └── PhoneCallParser.kt       # Phone call parsing
+│   │   ├── service/
+│   │   │   └── NavigationService.kt     # Foreground service
+│   │   ├── model/
+│   │   │   ├── NavigationData.kt        # Navigation data model
+│   │   │   └── PhoneCallData.kt         # Phone call data model
+│   │   ├── permission/
+│   │   │   └── PermissionHandler.kt     # Permission management
+│   │   ├── ui/
+│   │   │   ├── screens/
+│ Sage  │   │   │   └── HomeScreen.kt      # Home screen composable
+│   │   │   ├── components/
+│   │   │   │   ├── StatusCard.kt         # Status display card
+│   │   │   │   ├── NavigationDataDisplay.kt  # Navigation display
+│   │   │   │   ├── QuickActionPanel.kt   # Action buttons
+│   │   │   │   └── ConnectionIndicator.kt  # Connection status
+│   │   │   └── theme/
+│   │   │       ├── Color.kt              # Color definitions
+│   │   │       ├── Theme.kt              # Material3 theme
+│   │   │       └── Type.kt               # Typography
+│   │   └── utils/
+│   │       └── ETACalculator.kt          # ETA calculations
+│   ├── build.gradle.kts                 # App build configuration
+│   └── proguard-rules.pro              # ProGuard rules
+├── ardunio_files/
+│   └── src/smart_display_main/
+│       ├── smart_display_main.ino       # ESP32 firmware
+│       └── lv_conf.h                    # LVGL configuration
+├── build.gradle.kts                     # Root build configuration
+├── settings.gradle.kts                  # Project settings
+├── platformio.ini                       # PlatformIO configuration
+├── README.md                            # This file
+└── PROJECT_STRUCTURE.md                 # Detailed architecture documentation
+```
 
-Modify `BLEConstants.kt` to change:
-- Device name to scan for
-- Service and characteristic UUIDs
-- Timeout values
+## Data Formats
 
-### Notification Parsing
+### Navigation JSON
+```json
+{
+  "type": "NAVIGATION",
+  "direction": "left",
+  "distance": 300,
+  "maneuver": "Turn left at the light",
+  "eta": "5 mins"
+}
+```
 
-Update `NotificationParser.kt` to:
-- Add new direction patterns
-- Modify distance extraction regex
-- Add new maneuver types
+### Phone Call JSON
+```json
+{
+  "type": "PHONE_CALL",
+  "callState": "INCOMING",
+  "callerName": "John Doe",
+  "callerNumber": "+1234567890"
+}
+```
 
-### UI Customization
+### Call States
+- `INCOMING`: Incoming call detected
+- `ONGOING`: Call in progress (incoming answered or outgoing)
+- `ENDED`: Call ended normally
+- `MISSED`: Missed call (not answered)
 
-The UI is built with Jetpack Compose and Material Design 3. Modify the composables in `MainActivity.kt` to customize the interface.
+## Dependencies
+
+### Android App
+- AndroidX Core KTX
+- Jetpack Compose (Material3)
+- Lifecycle Runtime KTX
+- Work Manager KTX
+- Gson for JSON parsing
+
+### ESP32 Firmware
+- Arduino GFX Library
+- BLE Libraries (ESP32)
+- ArduinoJson
+- Touch driver (AXS5106L)
 
 ## Troubleshooting
 
-### Common Issues
+### Connection Issues
+- **App shows "Disconnected"**: Check Bluetooth is enabled, ESP32 is powered on, and try restarting the app
+- **Cannot find ESP32 device**: Ensure the ESP32 is in pairing mode (check serial monitor)
+- **Intermittent disconnections**: Move Android device closer to ESP32 or check for interference
 
-1. **BLE not connecting**: Ensure ESP32 is advertising with correct name and service UUIDs
-2. **Notifications not captured**: Check notification access permission in system settings
-3. **App stops in background**: Ensure battery optimization is disabled for the app
-4. **Permissions denied**: Check all permissions are granted in app settings
+### Navigation Not Displaying
+- **No navigation data**: Ensure Google Maps is actively navigating and notification access is enabled
+- **Wrong directions**: Check that notification parsing is working in Developer tab → Navigation History
+- **Stale data**: Tap "Clear All" in Navigation History and restart Google Maps navigation
 
-### Debug Logs
+### Phone Calls Not Detected
+- **No call notifications**: Enable notification access in Android settings
+- **Wrong call state**: Check Developer tab → Call History for parsed data
+- **Samsung device issues**: YatraMate includes special handling for Samsung's dialer notifications
 
-Enable debug logging to see detailed information:
-- BLE connection status
-- Notification parsing results
-- Message queuing status
-- Permission status
+### ESP32 Issues
+- **Display blank**: Check GPIO connections and power supply
+- **Touch not working**: Verify I2C connections and reset touch controller
+- **Watchdog resets**: Check serial monitor for error messages
 
-## License
+## Development
 
-This project is open source and available under the MIT License.
+### Building from Source
 
-## Contributing
+1. **Android App**:
+   ```bash
+   cd YatraMate
+   ./gradlew clean build
+   ```
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+2. **ESP32 Firmware**:
+   ```bash
+   cd ardunio_files
+   pio run -t upload
+   ```
+
+### Contributing
+
+This is a personal project by tnvsai. Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+### License
+
+Private project - All rights reserved by tnvsai
+
+## Credits
+
+**Developer**: tnvsai  
+**Project**: YatraMate  
+**Version**: 1.0
+
+## Support
+
+For issues, questions, or feature requests, please refer to the Developer tab in the app for detailed logs and debugging information.
+
+---
+
+*Built with ❤️ for safer and smarter driving*

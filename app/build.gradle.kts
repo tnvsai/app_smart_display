@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.smart"
+    namespace = "com.tnvsai.yatramate"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.smart"
+        applicationId = "com.tnvsai.yatramate"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
