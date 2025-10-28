@@ -337,16 +337,17 @@ class WorkingBLEService(private val context: Context) {
     }
     
     @SuppressLint("MissingPermission")
-    fun sendNavigationData(navigationData: NavigationData) {
+    fun sendNavigationData(navigationData: NavigationData, forceSend: Boolean = false) {
         Log.i(TAG, "=== SENDING NAVIGATION DATA ===")
         Log.i(TAG, "Data: $navigationData")
+        Log.i(TAG, "Force send: $forceSend")
         
         // Store latest data
         lastNavigationData = navigationData
         _currentNavigationData.value = navigationData
         
-        // Check if data has actually changed
-        if (lastSentNavigationData != null && isDataEqual(lastSentNavigationData!!, navigationData)) {
+        // Check if data has actually changed (unless force send)
+        if (!forceSend && lastSentNavigationData != null && isDataEqual(lastSentNavigationData!!, navigationData)) {
             Log.d(TAG, "⏭ Skipped duplicate navigation data (no changes)")
             return
         }
@@ -440,7 +441,11 @@ class WorkingBLEService(private val context: Context) {
                 updateStats(true)
                 
                 // Log to debug console (only after successful send)
-                val debugMessage = "Google Maps: ${navigationData.direction?.name} - ${navigationData.distance}"
+                val debugMessage = if (forceSend) {
+                    "Test: ${navigationData.direction?.name} - ${navigationData.distance}"
+                } else {
+                    "Google Maps: ${navigationData.direction?.name} - ${navigationData.distance}"
+                }
                 NotificationListenerService.debugLogCallback?.invoke(debugMessage)
             } else {
                 Log.e(TAG, "❌ Failed to send data")
@@ -527,6 +532,41 @@ class WorkingBLEService(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error sending phone call data: ${e.message}")
+            updateStats(false)
+        }
+    }
+    
+    /**
+     * Send raw JSON data directly to ESP32 (for manual JSON send feature)
+     */
+    @SuppressLint("MissingPermission")
+    fun sendRawData(jsonString: String) {
+        Log.i(TAG, "=== SENDING RAW JSON DATA ===")
+        Log.i(TAG, "Data: $jsonString")
+        
+        if (!isConnected || navigationCharacteristic == null) {
+            Log.w(TAG, "Not connected - cannot send raw data")
+            return
+        }
+        
+        try {
+            val data = jsonString.toByteArray()
+            Log.i(TAG, "Sending raw JSON to ESP32...")
+            Log.i(TAG, "Data length: ${data.size} bytes")
+            
+            navigationCharacteristic?.value = data
+            val writeResult = bluetoothGatt?.writeCharacteristic(navigationCharacteristic)
+            Log.i(TAG, "Write result: $writeResult")
+            
+            if (writeResult == true) {
+                Log.i(TAG, "✅ Raw JSON data sent successfully!")
+                updateStats(true)
+            } else {
+                Log.e(TAG, "❌ Failed to send raw JSON data")
+                updateStats(false)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending raw JSON data: ${e.message}")
             updateStats(false)
         }
     }

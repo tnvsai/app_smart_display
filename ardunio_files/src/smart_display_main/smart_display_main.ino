@@ -850,8 +850,15 @@ class MyCallbacks : public BLECharacteristicCallbacks {
             
             if (error == DeserializationError::Ok) {
                 const char* type = doc["type"];
+                
+                if (type == nullptr) {
+                    Serial.println("ERROR: JSON missing 'type' field");
+                    Serial.flush();
+                    return;
+                }
+                
                 Serial.print("Message type: ");
-                Serial.println(type ? type : "NULL");
+                Serial.println(type);
                 Serial.flush();
                 
                 if (strcmp(type, "phone_call") == 0) {
@@ -905,16 +912,19 @@ class MyCallbacks : public BLECharacteristicCallbacks {
                     }
                 } else {
                     // Handle navigation data - ALWAYS UPDATE SAVED STATE, BUT ONLY REDRAW IF NO CALL
-                    const char* dir = doc["direction"];
-                    int dist = doc["distance"];
-                    const char* man = doc["maneuver"];
-                    const char* eta = doc["eta"];
+                    const char* dir = doc["direction"] | "";
+                    int dist = doc["distance"] | 0;
+                    const char* man = doc["maneuver"] | "";
+                    const char* eta = doc["eta"] | "";
                     
                     String newDirection = String(dir ? dir : "");
                     
                     if (DEBUG_NAVIGATION) {
                         Serial.printf("[NAV] dir=%s, dist=%d, man=%s, eta=%s\n", dir, dist, man, eta);
                     }
+                    
+                    // Store old direction BEFORE updating for comparison
+                    String oldDirection = currentDirection;
                     
                     // ALWAYS update both current AND saved state (silently during calls)
                     currentDirection = String(dir ? dir : "");
@@ -934,33 +944,26 @@ class MyCallbacks : public BLECharacteristicCallbacks {
                     }
                     
                     // Check if direction changed during active call (for visual alert)
-                    bool isDirectionChange = (newDirection != currentDirection);
+                    bool isDirectionChange = (currentDirection != oldDirection);
                     if (isPhoneCallActive && isDirectionChange) {
                         Serial.println("[NAV] Direction changed during call - flashing border");
                         // Flash border to alert user
-                        for (int i = 0; i < 2; i++) {
-                            gfx->drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_YELLOW);
-                            gfx->drawRect(1, 1, SCREEN_WIDTH-2, SCREEN_HEIGHT-2, COLOR_YELLOW);
-                            delay(150);
-                            // Redraw current call screen
-                            displayIncomingCall(currentCallerName, currentCallerNumber);
-                            delay(150);
-                        }
+                        // Flash border once (non-blocking - avoid delays in BLE callback)
+                        gfx->drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_YELLOW);
+                        gfx->drawRect(1, 1, SCREEN_WIDTH-2, SCREEN_HEIGHT-2, COLOR_YELLOW);
                     }
                     
                     // Check if it's a critical navigation update (distance < 100m and direction changed)
                     bool isCriticalNav = (dist < 100 && isDirectionChange);
                     if (isPhoneCallActive && isCriticalNav) {
                         Serial.println("[NAV] Critical update during call - showing alert banner");
-                        // Show alert banner at bottom
+                        // Show alert banner at bottom (non-blocking - avoid delays in BLE callback)
                         gfx->fillRect(0, SCREEN_HEIGHT-50, SCREEN_WIDTH, 50, COLOR_RED);
                         gfx->setCursor(10, SCREEN_HEIGHT-35);
                         gfx->setTextColor(COLOR_WHITE);
                         gfx->setTextSize(2);
                         gfx->print(String(dir) + " " + String(dist) + "m");
-                        delay(3000);
-                        // Redraw call display
-                        displayIncomingCall(currentCallerName, currentCallerNumber);
+                        // Note: Banner will be cleared when navigation redraws
                     }
                     
                     // Only redraw navigation if no call is active

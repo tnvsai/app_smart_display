@@ -22,6 +22,21 @@ import com.example.smart.ui.components.StatusCard
 import com.example.smart.ui.components.StatusType
 
 /**
+ * Helper function to parse HH:mm:ss timestamp to seconds since midnight
+ */
+fun parseTimestamp(timestamp: String): Long {
+    return try {
+        val parts = timestamp.split(":")
+        if (parts.size == 3) {
+            val hours = parts[0].toLongOrNull() ?: 0L
+            val minutes = parts[1].toLongOrNull() ?: 0L
+            val seconds = parts[2].toLongOrNull() ?: 0L
+            hours * 3600 + minutes * 60 + seconds
+        } else 0L
+    } catch (e: Exception) { 0L }
+}
+
+/**
  * Home Screen - Primary navigation monitoring interface
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -152,12 +167,20 @@ fun HomeScreen(
                     
                     Spacer(modifier = Modifier.height(12.dp))
                     
-                    // Combine navigation and call data
+                    // Combine navigation and call data, sort by timestamp (newest first)
                     val allActivity = remember(recentNotifications, phoneDebugLogs) {
                         val combined = mutableListOf<Any>()
-                        recentNotifications.take(3).forEach { combined.add(it) }
-                        phoneDebugLogs.take(3).forEach { combined.add(it) }
-                        combined.take(5)
+                        recentNotifications.forEach { combined.add(it) }
+                        phoneDebugLogs.forEach { combined.add(it) }
+                        
+                        // Sort by timestamp descending (newest first) and limit to 5
+                        combined.sortedByDescending { item ->
+                            when (item) {
+                                is NotificationInfo -> parseTimestamp(item.timestamp)
+                                is NotificationListenerService.Companion.PhoneDebugLog -> parseTimestamp(item.timestamp)
+                                else -> 0L
+                            }
+                        }.take(5)
                     }
                     
                     if (allActivity.isEmpty()) {

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,12 +43,14 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
+import org.json.JSONObject
 import com.example.smart.ble.WorkingBLEService
 import com.example.smart.model.Direction
 import com.example.smart.model.NavigationData
 import com.example.smart.model.PhoneCallData
 import com.example.smart.model.CallState
 import com.example.smart.notification.NotificationListenerService
+import com.example.smart.notification.NotificationInfo
 import com.example.smart.permission.PermissionHandler
 import com.example.smart.service.NavigationService
 import com.example.smart.ui.theme.SmartTheme
@@ -292,6 +295,8 @@ fun CollapsibleCard(
     expanded: Boolean,
     onExpandChange: (Boolean) -> Unit,
     backgroundColor: Color = MaterialTheme.colorScheme.surface,
+    showClearButton: Boolean = false,
+    onClear: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
@@ -316,12 +321,26 @@ fun CollapsibleCard(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(24.dp)
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (showClearButton && onClear != null) {
+                        TextButton(
+                            onClick = { onClear() },
+                            modifier = Modifier.height(28.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) {
+                            Text("Clear All", fontSize = 12.sp)
+                        }
+                    }
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse" else "Expand",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
             if (expanded) {
                 HorizontalDivider(
@@ -350,8 +369,9 @@ fun NavigationApp(
     isBatteryOptimizationEnabled: () -> Boolean,
     onRequestDisableBatteryOptimization: () -> Unit
 ) {
-    var connectionStatus by remember { mutableStateOf(bleService.connectionStatus.value) }
-    var isScanning by remember { mutableStateOf(bleService.isScanningState.value) }
+    // Collect live connection status from StateFlow
+    val connectionStatus by bleService.connectionStatus.collectAsState()
+    val isScanning by bleService.isScanningState.collectAsState()
     val permissionStatus = permissionHandler.getPermissionStatus()
     
     // Tab state
@@ -369,15 +389,6 @@ fun NavigationApp(
     var debugLogs by remember { mutableStateOf(listOf<String>()) }
     var showTransmissionLogs by remember { mutableStateOf(false) }
     
-    // Collect state updates
-    LaunchedEffect(Unit) {
-        bleService.connectionStatus.collect { connectionStatus = it }
-    }
-    
-    LaunchedEffect(Unit) {
-        bleService.isScanningState.collect { isScanning = it }
-    }
-    
     // Add debug log
     fun addDebugLog(message: String) {
         val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
@@ -391,13 +402,27 @@ fun NavigationApp(
         }
     }
     
-    var manualDirection by remember { mutableStateOf("") }
-    var manualDistance by remember { mutableStateOf("") }
-    var manualManeuver by remember { mutableStateOf("") }
+    var jsonInput by remember { mutableStateOf("") }
+    var jsonError by remember { mutableStateOf<String?>(null) }
+    var sendMode by remember { mutableStateOf("json") } // "json" or "keyvalue"
+    var keyInput by remember { mutableStateOf("") }
+    var valueInput by remember { mutableStateOf("") }
+    var keyValuePairs by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     
     // Phone call debug section
     var phoneCallSectionExpanded by remember { mutableStateOf(false) }
     var phoneDebugLogs by remember { mutableStateOf(emptyList<NotificationListenerService.Companion.PhoneDebugLog>()) }
+    
+    // Recent notifications state
+    var recentNotifications by remember { mutableStateOf(listOf<NotificationInfo>()) }
+    
+    // Update recent notifications periodically
+    LaunchedEffect(Unit) {
+        while (true) {
+            recentNotifications = NotificationListenerService.getRecentNotifications()
+            delay(500) // Update every 500ms
+        }
+    }
     
     // Connect phone debug callback
     LaunchedEffect(Unit) {
@@ -414,12 +439,18 @@ fun NavigationApp(
             Column {
                 TopAppBar(
                     title = { 
-                        Column {
-                            Text("Yatra Mate")
+                        Column(
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "Yatra Mate",
+                                style = MaterialTheme.typography.titleLarge
+                            )
                             Text(
                                 text = "by tnvsai",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(top = 2.dp)
                             )
                         }
                     },
@@ -432,7 +463,7 @@ fun NavigationApp(
                             Icon(
                                 imageVector = Icons.Default.Circle,
                                 contentDescription = "Connection Status",
-                                tint = if (connectionStatus.isConnected) Color(0xFFF44336) else Color(0xFF4CAF50),
+                                tint = if (connectionStatus.isConnected) Color(0xFF4CAF50) else Color(0xFFF44336),
                                 modifier = Modifier.size(12.dp)
                             )
                             Text(
@@ -521,31 +552,28 @@ fun NavigationApp(
                         }
                     }
                     
-                    // Battery Optimization Warning
-                    if (isBatteryOptimizationEnabled()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFA500).copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    // Battery Optimization Status
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Battery Optimization: ${if (isBatteryOptimizationEnabled()) "Enabled" else "Disabled"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isBatteryOptimizationEnabled()) Color(0xFFFFA500) else Color(0xFF4CAF50)
+                        )
+                        Button(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                activity.startActivity(intent)
+                            },
+                            modifier = Modifier.height(32.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    "⚠️ Battery Optimization Enabled",
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    "This may stop the service. Disable for reliable operation.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = onRequestDisableBatteryOptimization,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("Disable Battery Optimization")
-                                }
-                            }
+                            Text("Open Settings", fontSize = 12.sp)
                         }
                     }
                 }
@@ -643,77 +671,204 @@ fun NavigationApp(
             // Manual Send Card (Simplified)
             item {
                 CollapsibleCard(
-                    title = "Quick Send",
+                    title = "Manual Send",
                     expanded = manualSectionExpanded,
                     onExpandChange = { manualSectionExpanded = it }
                 ) {
-                    // Direction Dropdown
-                    var directionExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = directionExpanded,
-                        onExpandedChange = { directionExpanded = !directionExpanded }
-                    ) {
-                        OutlinedTextField(
-                            value = manualDirection,
-                            onValueChange = {},
-                            label = { Text("Direction") },
-                            readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = directionExpanded) },
-                            modifier = Modifier.fillMaxWidth().menuAnchor()
+                    // Mode selector tabs
+                    TabRow(selectedTabIndex = if (sendMode == "json") 0 else 1) {
+                        Tab(
+                            selected = sendMode == "json", 
+                            onClick = { sendMode = "json" },
+                            text = { Text("Raw JSON") }
                         )
-                        ExposedDropdownMenu(
-                            expanded = directionExpanded,
-                            onDismissRequest = { directionExpanded = false }
-                        ) {
-                            Direction.values().forEach { direction ->
-                                DropdownMenuItem(
-                                    text = { Text(direction.displayName) },
-                                    onClick = {
-                                        manualDirection = direction.name
-                                        directionExpanded = false
-                                    }
+                        Tab(
+                            selected = sendMode == "keyvalue", 
+                            onClick = { sendMode = "keyvalue" },
+                            text = { Text("Key-Value Builder") }
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    // Mode-specific UI
+                    if (sendMode == "json") {
+                        // JSON input mode
+                        OutlinedTextField(
+                        value = jsonInput,
+                        onValueChange = { 
+                            jsonInput = it
+                            jsonError = null
+                        },
+                        label = { Text("JSON Data") },
+                        placeholder = { Text("{\"type\":\"NAVIGATION\",\"direction\":\"right\",\"distance\":200,\"maneuver\":\"Turn right\"}") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 4,
+                        maxLines = 8,
+                        isError = jsonError != null
+                        )
+                    } else {
+                        // Key-Value Builder mode
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = keyInput,
+                                    onValueChange = { 
+                                        keyInput = it
+                                        jsonError = null
+                                    },
+                                    label = { Text("Key") },
+                                    modifier = Modifier.weight(1f)
                                 )
+                                OutlinedTextField(
+                                    value = valueInput,
+                                    onValueChange = { 
+                                        valueInput = it
+                                        jsonError = null
+                                    },
+                                    label = { Text("Value") },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            
+                            Button(
+                                onClick = {
+                                    if (keyInput.isNotBlank() && valueInput.isNotBlank()) {
+                                        // Check for duplicate keys
+                                        if (keyValuePairs.any { it.first == keyInput }) {
+                                            jsonError = "Key '$keyInput' already exists"
+                                        } else {
+                                            keyValuePairs = keyValuePairs + (keyInput to valueInput)
+                                            keyInput = ""
+                                            valueInput = ""
+                                            jsonError = null
+                                        }
+                                    } else {
+                                        jsonError = "Both key and value must be filled"
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Add Entry")
+                            }
+                            
+                            // Display added entries
+                            if (keyValuePairs.isNotEmpty()) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f))
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text(
+                                            "Entries to send:",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(bottom = 4.dp)
+                                        )
+                                        keyValuePairs.forEachIndexed { index, (key, value) ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    "$key: $value",
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                                IconButton(
+                                                    onClick = { 
+                                                        keyValuePairs = keyValuePairs.filterIndexed { i, _ -> i != index }
+                                                    },
+                                                    modifier = Modifier.size(32.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.Close,
+                                                        contentDescription = "Remove",
+                                                        tint = Color.Red,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                     
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = manualDistance,
-                            onValueChange = { manualDistance = it },
-                            label = { Text("Distance") },
-                            placeholder = { Text("200m") },
-                            modifier = Modifier.weight(1f)
-                        )
-                        
-                        OutlinedTextField(
-                            value = manualManeuver,
-                            onValueChange = { manualManeuver = it },
-                            label = { Text("Maneuver") },
-                            placeholder = { Text("optional") },
-                            modifier = Modifier.weight(1f)
+                    if (jsonError != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = jsonError!!,
+                            color = Color.Red,
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
                     
                     Spacer(modifier = Modifier.height(12.dp))
                     
+                    // Send button (works for both modes)
                     Button(
                         onClick = {
-                            addDebugLog("Manual: $manualDirection|$manualDistance|$manualManeuver")
-                            onSendManualData(manualDirection, manualDistance, manualManeuver)
+                            val jsonToSend = if (sendMode == "json") {
+                                // Validate and use raw JSON
+                                if (jsonInput.isBlank()) {
+                                    jsonError = "JSON cannot be empty"
+                                    return@Button
+                                }
+                                try {
+                                    JSONObject(jsonInput).toString()
+                                } catch (e: Exception) {
+                                    jsonError = "Invalid JSON: ${e.message}"
+                                    return@Button
+                                }
+                            } else {
+                                // Build JSON from key-value pairs
+                                if (keyValuePairs.isEmpty()) {
+                                    jsonError = "Add at least one key-value entry"
+                                    return@Button
+                                }
+                                try {
+                                    // Build JSON object with smart value type conversion
+                                    val jsonMap = keyValuePairs.associate { (key, value) ->
+                                        val processedValue = when {
+                                            value.toIntOrNull() != null -> value.toInt()
+                                            value.toDoubleOrNull() != null -> value.toDouble()
+                                            value == "true" || value == "false" -> value.toBoolean()
+                                            value == "null" -> null
+                                            else -> value
+                                        }
+                                        key to processedValue
+                                    }
+                                    JSONObject(jsonMap).toString()
+                                } catch (e: Exception) {
+                                    jsonError = "Error building JSON: ${e.message}"
+                                    return@Button
+                                }
+                            }
+                            
+                            // Send via BLE
+                            bleService.sendRawData(jsonToSend)
+                            addDebugLog("Sent: $jsonToSend")
+                            
+                            // Clear only JSON input, keep key-value pairs
+                            if (sendMode == "json") {
+                                jsonInput = ""
+                            }
+                            // Key-value pairs persist for next send
+                            jsonError = null
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = manualDirection.isNotBlank() && manualDistance.isNotBlank(),
+                        enabled = (sendMode == "json" && jsonInput.isNotBlank()) || 
+                                  (sendMode == "keyvalue" && keyValuePairs.isNotEmpty()),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text("Send Data")
+                        Text("Send ${if (sendMode == "json") "JSON" else "${keyValuePairs.size} Entries"}")
                     }
                 }
             }
@@ -767,8 +922,7 @@ fun NavigationApp(
                                         maneuver = testManeuver,
                                         eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
-                                    bleService.sendNavigationData(testData)
-                                    addDebugLog("Test: ${direction.name}")
+                                    bleService.sendNavigationData(testData, forceSend = true)
                                 },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
@@ -794,8 +948,7 @@ fun NavigationApp(
                                         maneuver = testManeuver,
                                         eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
-                                    bleService.sendNavigationData(testData)
-                                    addDebugLog("Test: ${direction.name}")
+                                    bleService.sendNavigationData(testData, forceSend = true)
                                 },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
@@ -821,8 +974,7 @@ fun NavigationApp(
                                         maneuver = testManeuver,
                                         eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
-                                    bleService.sendNavigationData(testData)
-                                    addDebugLog("Test: ${direction.name}")
+                                    bleService.sendNavigationData(testData, forceSend = true)
                                 },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4))
@@ -852,8 +1004,7 @@ fun NavigationApp(
                                         maneuver = testManeuver,
                                         eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
-                                    bleService.sendNavigationData(testData)
-                                    addDebugLog("Test: ${direction.name}")
+                                    bleService.sendNavigationData(testData, forceSend = true)
                                 },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFEB3B))
@@ -882,8 +1033,7 @@ fun NavigationApp(
                                         maneuver = testManeuver,
                                         eta = ETACalculator.calculateETA(testDistance, direction)
                                     )
-                                    bleService.sendNavigationData(testData)
-                                    addDebugLog("Test: ${direction.name}")
+                                    bleService.sendNavigationData(testData, forceSend = true)
                                 },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9C27B0))
@@ -903,8 +1053,7 @@ fun NavigationApp(
                                 maneuver = "You have arrived",
                                 eta = ETACalculator.calculateETA("0m", Direction.DESTINATION_REACHED)
                             )
-                            bleService.sendNavigationData(testData)
-                            addDebugLog("Test: DESTINATION_REACHED")
+                            bleService.sendNavigationData(testData, forceSend = true)
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
@@ -937,7 +1086,6 @@ fun NavigationApp(
                                     callState = CallState.INCOMING
                                 )
                                 bleService.sendPhoneCallData(testData)
-                                addDebugLog("Test: Incoming Call")
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
@@ -954,7 +1102,6 @@ fun NavigationApp(
                                     duration = 125 // 2 minutes 5 seconds
                                 )
                                 bleService.sendPhoneCallData(testData)
-                                addDebugLog("Test: Ongoing Call")
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
@@ -970,7 +1117,6 @@ fun NavigationApp(
                                     callState = CallState.MISSED
                                 )
                                 bleService.sendPhoneCallData(testData)
-                                addDebugLog("Test: Missed Call")
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
@@ -986,7 +1132,6 @@ fun NavigationApp(
                                     callState = CallState.ENDED
                                 )
                                 bleService.sendPhoneCallData(testData)
-                                addDebugLog("Test: Call Ended")
                             },
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9E9E9E))
@@ -1058,12 +1203,17 @@ fun NavigationApp(
              // Recent Notifications Card (show when Google Maps sends data)
              item {
                  CollapsibleCard(
-                     title = "Recent Maps Notifications",
+                     title = "Navigation History",
                      expanded = notificationSectionExpanded,
                      onExpandChange = { notificationSectionExpanded = it },
-                     backgroundColor = Color.Blue.copy(alpha = 0.1f)
+                     backgroundColor = Color.Blue.copy(alpha = 0.1f),
+                     showClearButton = true,
+                     onClear = {
+                         NotificationListenerService.clearRecentNotifications()
+                         recentNotifications = emptyList()
+                     }
                  ) {
-                     val recentNotifications = NotificationListenerService.getRecentNotifications()
+                     // Use state instead of getting fresh each time
                      
                      if (recentNotifications.isEmpty()) {
                          Text(
@@ -1126,10 +1276,15 @@ fun NavigationApp(
              // Phone Call Debug Card
              item {
                  CollapsibleCard(
-                     title = "Phone Call Debug (${phoneDebugLogs.size})",
+                     title = "Call History (${phoneDebugLogs.size})",
                      expanded = phoneCallSectionExpanded,
                      onExpandChange = { phoneCallSectionExpanded = it },
-                     backgroundColor = Color(0xFF9C27B0).copy(alpha = 0.1f)
+                     backgroundColor = Color(0xFF9C27B0).copy(alpha = 0.1f),
+                     showClearButton = true,
+                     onClear = {
+                         NotificationListenerService.clearPhoneDebugLogs()
+                         phoneDebugLogs = emptyList()
+                     }
                  ) {
                      if (phoneDebugLogs.isEmpty()) {
                          Text(
@@ -1215,28 +1370,18 @@ fun NavigationApp(
              // Debug Logs Card
              item {
                  CollapsibleCard(
-                     title = "Debug Logs (${debugLogs.size})",
+                     title = "System Log (${debugLogs.size})",
                      expanded = debugSectionExpanded,
                      onExpandChange = { debugSectionExpanded = it },
-                     backgroundColor = Color.Black.copy(alpha = 0.05f)
-                                      ) {
-                     Row(
-                         modifier = Modifier.fillMaxWidth(),
-                         horizontalArrangement = Arrangement.SpaceBetween
-                     ) {
-                         Text(
-                             text = "Status: ${if (connectionStatus.isConnected) "Connected" else "Disconnected"}",
-                             style = MaterialTheme.typography.bodySmall,
-                             color = if (connectionStatus.isConnected) Color.Green else Color.Red
-                         )
-                         Button(
-                             onClick = { debugLogs = emptyList() },
-                             colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
-                             modifier = Modifier.height(32.dp)
-                         ) {
-                             Text("Clear", fontSize = 12.sp)
-                         }
-                     }
+                     backgroundColor = Color.Black.copy(alpha = 0.05f),
+                     showClearButton = true,
+                     onClear = { debugLogs = emptyList() }
+                 ) {
+                     Text(
+                         text = "Status: ${if (connectionStatus.isConnected) "Connected" else "Disconnected"}",
+                         style = MaterialTheme.typography.bodySmall,
+                         color = if (connectionStatus.isConnected) Color.Green else Color.Red
+                     )
                      
                      Spacer(modifier = Modifier.height(8.dp))
                      
