@@ -1,5 +1,8 @@
 package com.tnvsai.yatramate.notification
 
+import android.os.Build
+import com.tnvsai.yatramate.config.ConfigManager
+import com.tnvsai.yatramate.config.models.DeviceProfile
 import com.tnvsai.yatramate.model.CallState
 import com.tnvsai.yatramate.model.PhoneCallData
 import android.util.Log
@@ -7,10 +10,44 @@ import java.util.regex.Pattern
 
 /**
  * Parser for extracting phone call data from Android notifications
+ * Now supports device profiles for customizable OEM detection
  */
 object PhoneCallParser {
     
     private const val TAG = "PhoneCallParser"
+    
+    // Current active device profile
+    private var currentProfile: DeviceProfile? = null
+    
+    init {
+        loadDeviceProfile()
+    }
+    
+    /**
+     * Load device profile from configuration
+     */
+    private fun loadDeviceProfile() {
+        currentProfile = ConfigManager.getActiveDeviceProfile() ?: autoDetectDeviceProfile()
+        Log.d(TAG, "Loaded device profile: ${currentProfile?.name}")
+    }
+    
+    /**
+     * Auto-detect device profile based on manufacturer
+     */
+    private fun autoDetectDeviceProfile(): DeviceProfile? {
+        val manufacturer = Build.MANUFACTURER
+        Log.d(TAG, "Auto-detecting device profile for manufacturer: $manufacturer")
+        return ConfigManager.getProfileForManufacturer(manufacturer) ?: ConfigManager.getAllDeviceProfiles().find { it.id == "generic" }
+    }
+    
+    /**
+     * Set active device profile
+     */
+    fun setDeviceProfile(profileId: String) {
+        ConfigManager.setActiveProfile(profileId)
+        loadDeviceProfile()
+        Log.i(TAG, "Device profile set to: $profileId")
+    }
     
     // Deduplication - track recent notifications
     private val recentNotifications = mutableMapOf<String, Long>()

@@ -1,0 +1,61 @@
+{
+  "version": "1.0",
+  "active_format": "esp32_json",
+  "formats": {
+    "esp32_json": {
+      "name": "ESP32 JSON Format",
+      "max_payload": 512,
+      "direction_mapping": {
+        "LEFT": "left",
+        "RIGHT": "right",
+        "STRAIGHT": "straight",
+        "U_TURN": "uturn",
+        "SHARP_LEFT": "sharp_left",
+        "SHARP_RIGHT": "sharp_right",
+        "SLIGHT_LEFT": "slight_left",
+        "SLIGHT_RIGHT": "slight_right",
+        "MERGE_LEFT": "merge_left",
+        "MERGE_RIGHT": "merge_right",
+        "KEEP_LEFT": "keep_left",
+        "KEEP_RIGHT": "keep_right",
+        "DESTINATION_REACHED": "destination",
+        "WAYPOINT_REACHED": "waypoint",
+        "ROUNDABOUT_LEFT": "roundabout_left",
+        "ROUNDABOUT_RIGHT": "roundabout_right",
+        "ROUNDABOUT_STRAIGHT": "roundabout_straight"
+      },
+      "call_state_mapping": {
+        "INCOMING": "INCOMING",
+        "ONGOING": "ONGOING",
+        "MISSED": "MISSED",
+        "ENDED": "ENDED"
+      },
+      "notification_types": {
+        "navigation": {
+          "type": "nav",
+          "fields": ["direction", "distance", "maneuver"]
+        },
+        "phone_call": {
+          "type": "call",
+          "fields": ["caller", "state"]
+        },
+        "message": {
+          "type": "msg",
+          "fields": ["sender", "preview"]
+        },
+        "music": {
+          "type": "music",
+          "fields": ["title", "artist", "song"]
+        },
+        "battery": {
+          "type": "battery",
+          "fields": ["level", "status"]
+        },
+        "weather": {
+          "type": "weather",
+          "fields": ["temperature", "condition", "location"]
+        }
+      }
+    }
+  }
+}

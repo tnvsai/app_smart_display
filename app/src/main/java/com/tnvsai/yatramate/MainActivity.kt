@@ -2,6 +2,8 @@ package com.tnvsai.yatramate
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -28,10 +30,12 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -49,15 +53,27 @@ import com.tnvsai.yatramate.model.Direction
 import com.tnvsai.yatramate.model.NavigationData
 import com.tnvsai.yatramate.model.PhoneCallData
 import com.tnvsai.yatramate.model.CallState
+import com.tnvsai.yatramate.config.ConfigManager
 import com.tnvsai.yatramate.notification.NotificationListenerService
 import com.tnvsai.yatramate.notification.NotificationInfo
+import com.tnvsai.yatramate.notification.NotificationHistoryManager
+import com.tnvsai.yatramate.notification.UnifiedNotificationEntry
+import com.tnvsai.yatramate.notification.NavigationNotificationEntry
+import com.tnvsai.yatramate.notification.PhoneCallNotificationEntry
+import com.tnvsai.yatramate.notification.MessageNotificationEntry
+import com.tnvsai.yatramate.notification.GenericNotificationEntry
+import com.tnvsai.yatramate.notification.registry.ParserRegistry
+import com.tnvsai.yatramate.ui.components.UnifiedHistoryCard
+import com.tnvsai.yatramate.notification.parsers.GoogleMapsParser
 import com.tnvsai.yatramate.permission.PermissionHandler
 import com.tnvsai.yatramate.service.NavigationService
 import com.tnvsai.yatramate.ui.theme.SmartTheme
 import com.tnvsai.yatramate.ui.screens.HomeScreen
 import com.tnvsai.yatramate.utils.ETACalculator
+// BLEConnectionStatus and PermissionStatus are nested classes, use fully qualified names
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.collectAsState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -105,6 +121,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         
         Log.i(TAG, "MainActivity created")
+        
+        // Initialize configuration system
+        ConfigManager.initialize(applicationContext)
+        com.tnvsai.yatramate.config.ConfigPersistence.initialize(applicationContext)
+        com.tnvsai.yatramate.config.NotificationConfigManager.initialize(applicationContext)
+        
+        // Register default parsers
+        ParserRegistry.registerParser("google_maps", GoogleMapsParser())
         
         // Initialize services
         permissionHandler = PermissionHandler(this)
@@ -409,22 +433,39 @@ fun NavigationApp(
     var valueInput by remember { mutableStateOf("") }
     var keyValuePairs by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     
-    // Phone call debug section
+    // Unified notification history
+    var unifiedHistoryExpanded by remember { mutableStateOf(false) }
+    var selectedHistoryFilter by remember { mutableStateOf("All") }
+    
+    // Keep legacy states for backward compatibility during migration
     var phoneCallSectionExpanded by remember { mutableStateOf(false) }
     var phoneDebugLogs by remember { mutableStateOf(emptyList<NotificationListenerService.Companion.PhoneDebugLog>()) }
-    
-    // Recent notifications state
     var recentNotifications by remember { mutableStateOf(listOf<NotificationInfo>()) }
     
-    // Update recent notifications periodically
-    LaunchedEffect(Unit) {
-        while (true) {
-            recentNotifications = NotificationListenerService.getRecentNotifications()
-            delay(500) // Update every 500ms
+    // Collect unified history and filter
+    val allHistoryEntries by NotificationHistoryManager.history.collectAsState()
+    
+    // Compute filtered history
+    val unifiedHistory = remember(selectedHistoryFilter, allHistoryEntries) {
+        when (selectedHistoryFilter) {
+            "Navigation" -> allHistoryEntries.filterIsInstance<NavigationNotificationEntry>()
+            "Calls" -> allHistoryEntries.filterIsInstance<PhoneCallNotificationEntry>()
+            "Messages" -> allHistoryEntries.filterIsInstance<MessageNotificationEntry>()
+            "Other" -> allHistoryEntries.filterIsInstance<GenericNotificationEntry>()
+            else -> allHistoryEntries
         }
     }
     
-    // Connect phone debug callback
+    // Legacy: Update recent notifications periodically (this is inefficient - consider removing)
+    // Note: Unified history is already reactive via StateFlow, this is just for backward compatibility
+    LaunchedEffect(Unit) {
+        while (true) {
+            recentNotifications = NotificationListenerService.getRecentNotifications()
+            delay(1000) // Update every 1s (reduced from 500ms to reduce overhead)
+        }
+    }
+    
+    // Connect phone debug callback (legacy)
     LaunchedEffect(Unit) {
         NotificationListenerService.setPhoneDebugLogCallback { log ->
             phoneDebugLogs = (listOf(log) + phoneDebugLogs).take(20)
@@ -432,7 +473,7 @@ fun NavigationApp(
     }
     
     // Tab titles
-    val tabs = listOf("Home", "Developer")
+    val tabs = listOf("Home", "Developer", "Settings")
     
     Scaffold(
         topBar = {
@@ -509,7 +550,114 @@ fun NavigationApp(
                     onStartService = onStartService,
                     onStopAllServices = onStopAllServices
                 )
-                1 -> LazyColumn(
+                1 -> DeveloperTab(
+                    connectionStatus = connectionStatus,
+                    permissionStatus = permissionStatus,
+                    permissionHandler = permissionHandler,
+                    bleService = bleService,
+                    activity = activity,
+                    onRequestPermissions = onRequestPermissions,
+                    onStartService = onStartService,
+                    onStopAllServices = onStopAllServices,
+                    onSendManualData = onSendManualData,
+                    isBatteryOptimizationEnabled = isBatteryOptimizationEnabled,
+                    onRequestDisableBatteryOptimization = onRequestDisableBatteryOptimization
+                )
+                2 -> com.tnvsai.yatramate.ui.screens.NotificationSettingsScreen()
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun DeveloperTab(
+    connectionStatus: com.tnvsai.yatramate.ble.WorkingBLEService.BLEConnectionStatus,
+    permissionStatus: com.tnvsai.yatramate.permission.PermissionHandler.PermissionStatus,
+    permissionHandler: com.tnvsai.yatramate.permission.PermissionHandler,
+    bleService: WorkingBLEService,
+    activity: ComponentActivity,
+    onRequestPermissions: () -> Unit,
+    onStartService: () -> Unit,
+    onStopAllServices: () -> Unit,
+    onSendManualData: (String, String, String) -> Unit,
+    isBatteryOptimizationEnabled: () -> Boolean,
+    onRequestDisableBatteryOptimization: () -> Unit
+) {
+    // Collect isScanning from BLE service
+    val isScanning by bleService.isScanningState.collectAsState()
+    
+    // Collapsible section states
+    var permissionSectionExpanded by remember { mutableStateOf(true) }
+    var bleSectionExpanded by remember { mutableStateOf(true) }
+    var manualSectionExpanded by remember { mutableStateOf(false) }
+    var unifiedHistoryExpanded by remember { mutableStateOf(false) }
+    var selectedHistoryFilter by remember { mutableStateOf("All") }
+    var testingSectionExpanded by remember { mutableStateOf(false) }
+    var notificationSectionExpanded by remember { mutableStateOf(false) }
+    var debugSectionExpanded by remember { mutableStateOf(false) }
+    
+    // Debug log state
+    var debugLogs by remember { mutableStateOf(listOf<String>()) }
+    var showTransmissionLogs by remember { mutableStateOf(false) }
+    
+    // Add debug log
+    fun addDebugLog(message: String) {
+        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        debugLogs = (listOf("[$timestamp] $message") + debugLogs).take(50)
+    }
+    
+    // Connect notification listener to debug log
+    LaunchedEffect(Unit) {
+        NotificationListenerService.setDebugLogCallback { message ->
+            addDebugLog(message)
+        }
+    }
+    
+    // Manual send state
+    var jsonInput by remember { mutableStateOf("") }
+    var jsonError by remember { mutableStateOf<String?>(null) }
+    var sendMode by remember { mutableStateOf("json") } // "json" or "keyvalue"
+    var keyInput by remember { mutableStateOf("") }
+    var valueInput by remember { mutableStateOf("") }
+    var keyValuePairs by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    
+    // Keep legacy states for backward compatibility during migration
+    var phoneCallSectionExpanded by remember { mutableStateOf(false) }
+    var phoneDebugLogs by remember { mutableStateOf(emptyList<com.tnvsai.yatramate.notification.NotificationListenerService.Companion.PhoneDebugLog>()) }
+    var recentNotifications by remember { mutableStateOf(listOf<com.tnvsai.yatramate.notification.NotificationInfo>()) }
+    
+    // Collect unified history and filter
+    val allHistoryEntries by com.tnvsai.yatramate.notification.NotificationHistoryManager.history.collectAsState()
+    
+    // Compute filtered history
+    val unifiedHistory = remember(selectedHistoryFilter, allHistoryEntries) {
+        when (selectedHistoryFilter) {
+            "Navigation" -> allHistoryEntries.filterIsInstance<com.tnvsai.yatramate.notification.NavigationNotificationEntry>()
+            "Calls" -> allHistoryEntries.filterIsInstance<com.tnvsai.yatramate.notification.PhoneCallNotificationEntry>()
+            "Messages" -> allHistoryEntries.filterIsInstance<com.tnvsai.yatramate.notification.MessageNotificationEntry>()
+            "Other" -> allHistoryEntries.filterIsInstance<com.tnvsai.yatramate.notification.GenericNotificationEntry>()
+            else -> allHistoryEntries
+        }
+    }
+    
+    // Legacy: Update recent notifications periodically (this is inefficient - consider removing)
+    // Note: Unified history is already reactive via StateFlow, this is just for backward compatibility
+    LaunchedEffect(Unit) {
+        while (true) {
+            recentNotifications = com.tnvsai.yatramate.notification.NotificationListenerService.getRecentNotifications()
+            delay(1000) // Update every 1s (reduced from 500ms to reduce overhead)
+        }
+    }
+    
+    // Connect phone debug callback (legacy)
+    LaunchedEffect(Unit) {
+        com.tnvsai.yatramate.notification.NotificationListenerService.setPhoneDebugLogCallback { log ->
+            phoneDebugLogs = (listOf(log) + phoneDebugLogs).take(20)
+        }
+    }
+    
+    LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1200,167 +1348,86 @@ fun NavigationApp(
                 }
             }
              
-             // Recent Notifications Card (show when Google Maps sends data)
+             // Unified Notification History Card
              item {
                  CollapsibleCard(
-                     title = "Navigation History",
-                     expanded = notificationSectionExpanded,
-                     onExpandChange = { notificationSectionExpanded = it },
-                     backgroundColor = Color.Blue.copy(alpha = 0.1f),
+                     title = "Notification History (${unifiedHistory.size})",
+                     expanded = unifiedHistoryExpanded,
+                     onExpandChange = { unifiedHistoryExpanded = it },
+                     backgroundColor = Color(0xFF2196F3).copy(alpha = 0.1f),
                      showClearButton = true,
                      onClear = {
+                         NotificationHistoryManager.clearHistory()
+                         // Also clear legacy lists
                          NotificationListenerService.clearRecentNotifications()
-                         recentNotifications = emptyList()
-                     }
-                 ) {
-                     // Use state instead of getting fresh each time
-                     
-                     if (recentNotifications.isEmpty()) {
-                         Text(
-                             "No Google Maps notifications received yet. Start navigation to see data.",
-                             style = MaterialTheme.typography.bodySmall,
-                             color = Color.Gray
-                         )
-                     } else {
-                         Column(
-                             modifier = Modifier.fillMaxWidth(),
-                             verticalArrangement = Arrangement.spacedBy(8.dp)
-                         ) {
-                             recentNotifications.take(5).forEach { notif ->
-                                 Card(
-                                     modifier = Modifier.fillMaxWidth(),
-                                     colors = CardDefaults.cardColors(
-                                         containerColor = if (notif.isNavigation) Color.Green.copy(alpha = 0.1f) else Color.Black.copy(alpha = 0.05f)
-                                     )
-                                 ) {
-                                     Column(modifier = Modifier.padding(8.dp)) {
-                                         Row(
-                                             modifier = Modifier.fillMaxWidth(),
-                                             horizontalArrangement = Arrangement.SpaceBetween
-                                         ) {
-                                             Text(
-                                                 notif.timestamp,
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 fontWeight = FontWeight.Bold
-                                             )
-                                             Text(
-                                                 if (notif.isNavigation) "✓ Parsed" else "⚠ Not Navigation",
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 color = if (notif.isNavigation) Color.Green else Color.Gray
-                                             )
-                                         }
-                                         if (notif.text != null) {
-                                             Text(
-                                                 notif.text,
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 modifier = Modifier.padding(top = 4.dp)
-                                             )
-                                         }
-                                         if (notif.parsedData != null) {
-                                             Text(
-                                                 "Parsed: $notif.parsedData",
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 color = Color(0xFF4CAF50),
-                                                 fontWeight = FontWeight.Medium,
-                                                 modifier = Modifier.padding(top = 4.dp)
-                                             )
-                                         }
-                                     }
-                                 }
-                }
-            }
-        }
-    }
-}
-
-             // Phone Call Debug Card
-             item {
-                 CollapsibleCard(
-                     title = "Call History (${phoneDebugLogs.size})",
-                     expanded = phoneCallSectionExpanded,
-                     onExpandChange = { phoneCallSectionExpanded = it },
-                     backgroundColor = Color(0xFF9C27B0).copy(alpha = 0.1f),
-                     showClearButton = true,
-                     onClear = {
                          NotificationListenerService.clearPhoneDebugLogs()
+                         recentNotifications = emptyList()
                          phoneDebugLogs = emptyList()
                      }
                  ) {
-                     if (phoneDebugLogs.isEmpty()) {
-                         Text(
-                             "No phone notifications received yet. Make or receive a call to see data.",
-                             style = MaterialTheme.typography.bodySmall,
-                             color = Color.Gray
-                         )
-                     } else {
-                         Column(
+                     val context = LocalContext.current
+                     val clipboardManager = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
+                     
+                     val historyFilters = listOf("All", "Navigation", "Calls", "Messages", "Other")
+                     
+                     // Filter chips and copy button
+                     Column {
+                         FlowRow(
                              modifier = Modifier
                                  .fillMaxWidth()
-                                 .heightIn(max = 400.dp),
+                                 .padding(bottom = 8.dp),
+                             horizontalArrangement = Arrangement.spacedBy(4.dp),
+                             verticalArrangement = Arrangement.spacedBy(4.dp)
+                         ) {
+                             historyFilters.forEach { filter ->
+                                 FilterChip(
+                                     selected = selectedHistoryFilter == filter,
+                                     onClick = { selectedHistoryFilter = filter },
+                                     label = { Text(filter, fontSize = 12.sp) },
+                                     modifier = Modifier.padding(horizontal = 2.dp)
+                                 )
+                             }
+                         }
+                         
+                         // Copy all history button
+                         if (unifiedHistory.isNotEmpty()) {
+                             Button(
+                                 onClick = {
+                                     val allHistoryText = formatAllHistoryForClipboard(unifiedHistory)
+                                     val clip = ClipData.newPlainText("Notification History", allHistoryText)
+                                     clipboardManager.setPrimaryClip(clip)
+                                 },
+                             modifier = Modifier.fillMaxWidth(),
+                                 colors = ButtonDefaults.buttonColors(
+                                     containerColor = MaterialTheme.colorScheme.primaryContainer
+                                 )
+                             ) {
+                                 Icon(
+                                     imageVector = Icons.Default.ContentCopy,
+                                     contentDescription = null,
+                                     modifier = Modifier.size(18.dp)
+                                 )
+                                 Spacer(modifier = Modifier.width(8.dp))
+                                 Text("Copy All History (${unifiedHistory.size} entries)")
+                             }
+                             Spacer(modifier = Modifier.height(12.dp))
+                         }
+                     }
+                     
+                     if (unifiedHistory.isEmpty()) {
+                         Text(
+                             "No notifications received yet. Notifications will appear here as they are detected.",
+                             style = MaterialTheme.typography.bodySmall,
+                             color = Color.Gray,
+                             modifier = Modifier.padding(vertical = 8.dp)
+                         )
+                     } else {
+                         LazyColumn(
+                             modifier = Modifier.heightIn(max = 600.dp),
                              verticalArrangement = Arrangement.spacedBy(8.dp)
                          ) {
-                             phoneDebugLogs.take(10).forEach { log ->
-                                 Card(
-                                     modifier = Modifier.fillMaxWidth(),
-                                     colors = CardDefaults.cardColors(
-                                         containerColor = when (log.state) {
-                                             "INCOMING" -> Color(0xFF4CAF50).copy(alpha = 0.1f)
-                                             "MISSED" -> Color(0xFFF44336).copy(alpha = 0.1f)
-                                             "ONGOING" -> Color(0xFF2196F3).copy(alpha = 0.1f)
-                                             "ENDED" -> Color(0xFF9E9E9E).copy(alpha = 0.1f)
-                                             else -> Color.Black.copy(alpha = 0.05f)
-                                         }
-                                     )
-                                 ) {
-                                     Column(modifier = Modifier.padding(8.dp)) {
-                                         Row(
-                                             modifier = Modifier.fillMaxWidth(),
-                                             horizontalArrangement = Arrangement.SpaceBetween
-                                         ) {
-                                             Text(
-                                                 log.timestamp,
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 fontWeight = FontWeight.Bold
-                                             )
-                                             Text(
-                                                 log.state,
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 fontWeight = FontWeight.Bold,
-                                                 color = when (log.state) {
-                                                     "INCOMING" -> Color(0xFF4CAF50)
-                                                     "MISSED" -> Color(0xFFF44336)
-                                                     "ONGOING" -> Color(0xFF2196F3)
-                                                     "ENDED" -> Color(0xFF9E9E9E)
-                                                     else -> Color.Gray
-                                                 }
-                                             )
-                                         }
-                                         Text(
-                                             "Name: ${log.callerName ?: "Unknown"}",
-                                             style = MaterialTheme.typography.bodySmall,
-                                             modifier = Modifier.padding(top = 4.dp)
-                                         )
-                                         Text(
-                                             "Number: ${log.callerNumber ?: "Unknown"}",
-                                             style = MaterialTheme.typography.bodySmall
-                                         )
-                                         if (log.title != null) {
-                                             Text(
-                                                 "Title: ${log.title}",
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 color = Color.Gray,
-                                                 modifier = Modifier.padding(top = 4.dp)
-                                             )
-                                         }
-                                         if (log.text != null) {
-                                             Text(
-                                                 "Text: ${log.text}",
-                                                 style = MaterialTheme.typography.bodySmall,
-                                                 color = Color.Gray
-                                             )
-                                         }
-                                     }
-                                 }
+                             items(unifiedHistory.take(20)) { entry ->
+                                 UnifiedHistoryCard(entry = entry)
                              }
                          }
                      }
@@ -1420,8 +1487,166 @@ fun NavigationApp(
              }
                 }
             }
+
+/**
+ * Format all history entries into a single text for clipboard
+ */
+private fun formatAllHistoryForClipboard(entries: List<UnifiedNotificationEntry>): String {
+    return buildString {
+        appendLine("=== YATRAMATE NOTIFICATION HISTORY ===")
+        appendLine("Total Entries: ${entries.size}")
+        appendLine("Generated: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
+        appendLine()
+        appendLine("=".repeat(80))
+        appendLine()
+        
+        entries.forEachIndexed { index, entry ->
+            appendLine(formatSingleEntryForClipboard(entry))
+            if (index < entries.size - 1) {
+                appendLine()
+                appendLine("-".repeat(80))
+                appendLine()
+            }
+        }
+        
+        appendLine()
+        appendLine("=".repeat(80))
+        appendLine("END OF HISTORY")
+    }
+}
+
+/**
+ * Format a single notification entry for clipboard
+ */
+private fun formatSingleEntryForClipboard(entry: UnifiedNotificationEntry): String {
+    return buildString {
+        appendLine("=== Notification Details ===")
+        appendLine("Type: ${getNotificationTypeLabelForClipboard(entry)}")
+        appendLine("Timestamp: ${entry.timestampDisplay}")
+        appendLine("Package: ${entry.packageName}")
+        appendLine("Sent to MCU: ${if (entry.sentToMCU) "Yes" else "No"}")
+        appendLine()
+        
+        when (entry) {
+            is NavigationNotificationEntry -> {
+                appendLine("=== Navigation Information ===")
+                entry.title?.let { appendLine("Title: $it") }
+                entry.text?.let { appendLine("Text: $it") }
+                entry.bigText?.let { appendLine("Big Text: $it") }
+                entry.direction?.let { appendLine("Direction: $it") }
+                entry.distance?.let { appendLine("Distance: $it") }
+                entry.maneuver?.let { appendLine("Maneuver: $it") }
+                entry.eta?.let { appendLine("ETA: $it") }
+                entry.parsedData?.let { appendLine("Parsed Data: $it") }
+                appendLine("Is Google Maps: ${entry.isGoogleMaps}")
+                appendLine("Is Navigation: ${entry.isNavigation}")
+                entry.parsingMethod?.let { appendLine("Parsing Method: $it") }
+                entry.parserName?.let { appendLine("Parser Name: $it") }
+            }
+            is PhoneCallNotificationEntry -> {
+                appendLine("=== Phone Call Information ===")
+                entry.title?.let { appendLine("Title: $it") }
+                entry.text?.let { appendLine("Text: $it") }
+                entry.bigText?.let { appendLine("Big Text: $it") }
+                appendLine("Call State: ${entry.callState}")
+                entry.callerName?.let { appendLine("Caller Name: $it") }
+                entry.callerNumber?.let { appendLine("Caller Number: $it") }
+                appendLine("Duration: ${entry.duration}s")
+                entry.deviceProfile?.let { appendLine("Device Profile: $it") }
+                entry.detectionPattern?.let { appendLine("Detection Pattern: $it") }
+                appendLine("Was Outgoing: ${entry.wasOutgoing}")
+                appendLine("Was Answered: ${entry.wasAnswered}")
+                appendLine("Was Missed: ${entry.wasMissed}")
+                entry.phoneNumberFromExtras?.let { appendLine("Phone Number (from extras): $it") }
+            }
+            is MessageNotificationEntry -> {
+                appendLine("=== Message Information ===")
+                entry.title?.let { appendLine("Title: $it") }
+                entry.text?.let { appendLine("Text: $it") }
+                entry.bigText?.let { appendLine("Big Text: $it") }
+                entry.sender?.let { appendLine("Sender: $it") }
+                entry.message?.let { appendLine("Message: $it") }
+                appendLine("App Name: ${entry.appName}")
+                entry.messageType?.let { appendLine("Message Type: $it") }
+                appendLine("Has Attachment: ${entry.hasAttachment}")
+                entry.groupName?.let { appendLine("Group Name: $it") }
+            }
+            is GenericNotificationEntry -> {
+                appendLine("=== Generic Notification Information ===")
+                entry.title?.let { appendLine("Title: $it") }
+                entry.text?.let { appendLine("Text: $it") }
+                entry.bigText?.let { appendLine("Big Text: $it") }
+                appendLine("Notification Type: ${entry.notificationType}")
+                entry.mcuType?.let { appendLine("MCU Type: $entry.mcuType") }
+                if (entry.extractedData.isNotEmpty()) {
+                    appendLine("Extracted Data:")
+                    entry.extractedData.forEach { (key, value) ->
+                        appendLine("  $key: $value")
+                    }
+                }
+                if (entry.classificationKeywordsMatched.isNotEmpty()) {
+                    appendLine("Matched Keywords: ${entry.classificationKeywordsMatched.joinToString(", ")}")
+                }
+                if (entry.classificationTitlePatternsMatched.isNotEmpty()) {
+                    appendLine("Matched Title Patterns: ${entry.classificationTitlePatternsMatched.joinToString(", ")}")
+                }
+                appendLine("App Matched: ${entry.classificationAppMatched}")
+            }
+        }
+        
+        val hasDebug = entry.debugInfo.classificationConfidence != null ||
+                entry.debugInfo.classificationMethod != null ||
+                entry.debugInfo.bleTransmissionAttempts > 0 ||
+                entry.debugInfo.parsingErrors.isNotEmpty() ||
+                entry.debugInfo.filterReason != null ||
+                entry.debugInfo.transformerOutput != null
+        
+        if (hasDebug) {
+            appendLine()
+            appendLine("=== Debug Information ===")
+            entry.debugInfo.classificationConfidence?.let {
+                appendLine("Classification Confidence: $it")
+            }
+            entry.debugInfo.classificationMethod?.let {
+                appendLine("Classification Method: $it")
+            }
+            if (entry.debugInfo.parsingErrors.isNotEmpty()) {
+                appendLine("Parsing Errors:")
+                entry.debugInfo.parsingErrors.forEach { error ->
+                    appendLine("  - $error")
+                }
+            }
+            if (entry.debugInfo.bleTransmissionErrors.isNotEmpty()) {
+                appendLine("BLE Transmission Errors:")
+                entry.debugInfo.bleTransmissionErrors.forEach { error ->
+                    appendLine("  - $error")
+                }
+            }
+            entry.debugInfo.filterReason?.let {
+                appendLine("Filter Reason: $it")
+            }
+            appendLine("BLE Transmission Attempts: ${entry.debugInfo.bleTransmissionAttempts}")
+            appendLine("BLE Transmission Success: ${entry.debugInfo.bleTransmissionSuccess}")
+            entry.debugInfo.transformerOutput?.let {
+                appendLine("Transformer Output: $it")
+            }
         }
     }
 }
 
-
+/**
+ * Get notification type label for clipboard formatting
+ */
+private fun getNotificationTypeLabelForClipboard(entry: UnifiedNotificationEntry): String {
+    return when (entry) {
+        is NavigationNotificationEntry -> "Navigation"
+        is PhoneCallNotificationEntry -> when (entry.callState) {
+            CallState.INCOMING -> "Incoming Call"
+            CallState.MISSED -> "Missed Call"
+            CallState.ONGOING -> "Ongoing Call"
+            CallState.ENDED -> "Call Ended"
+        }
+        is MessageNotificationEntry -> entry.appName
+        is GenericNotificationEntry -> entry.notificationType.replaceFirstChar { it.uppercaseChar() }
+    }
+}

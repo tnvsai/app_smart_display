@@ -142,6 +142,45 @@ class NotificationListenerService : NotificationListenerService() {
         super.onCreate()
         instance = this
         Log.i(TAG, "NotificationListenerService created")
+        
+        // Ensure ConfigManager is initialized (defensive check)
+        try {
+                // Try to get types - if it fails, initialize
+                val testTypes = try {
+                    val types = com.tnvsai.yatramate.config.ConfigManager.getAllNotificationTypes()
+                    if (types.isEmpty()) {
+                        Log.w(TAG, "⚠️ ConfigManager returned 0 types, initializing...")
+                        com.tnvsai.yatramate.config.ConfigManager.initialize(applicationContext)
+                        com.tnvsai.yatramate.config.ConfigPersistence.initialize(applicationContext)
+                        com.tnvsai.yatramate.config.NotificationConfigManager.initialize(applicationContext)
+                        com.tnvsai.yatramate.config.ConfigManager.getAllNotificationTypes()
+                    } else {
+                        types
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ ConfigManager.getAllNotificationTypes() failed, initializing... ${e.message}", e)
+                    com.tnvsai.yatramate.config.ConfigManager.initialize(applicationContext)
+                    com.tnvsai.yatramate.config.ConfigPersistence.initialize(applicationContext)
+                    com.tnvsai.yatramate.config.NotificationConfigManager.initialize(applicationContext)
+                    try {
+                        com.tnvsai.yatramate.config.ConfigManager.getAllNotificationTypes()
+                    } catch (e2: Exception) {
+                        Log.e(TAG, "❌ Failed to get types even after initialization: ${e2.message}", e2)
+                        emptyList()
+                    }
+                }
+                
+                if (testTypes.isEmpty()) {
+                    Log.e(TAG, "❌❌❌ CRITICAL: Still 0 types after initialization! Check notification_types.json!")
+                } else {
+                    Log.i(TAG, "✅ ConfigManager initialized in NotificationListenerService: ${testTypes.size} types loaded")
+                    testTypes.take(3).forEach { type ->
+                        Log.d(TAG, "  - ${type.id}: ${type.apps.size} apps, ${type.keywords.size} keywords")
+                    }
+                }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to initialize ConfigManager in NotificationListenerService: ${e.message}", e)
+        }
     }
     
     override fun onDestroy() {
@@ -167,88 +206,264 @@ class NotificationListenerService : NotificationListenerService() {
         Log.i(TAG, "📄 BigText: $bigText")
         Log.i(TAG, "BLE Service Available: ${bleService != null}")
         
-        // Enhanced debugging for phone notifications
-        if (PhoneCallParser.isPhoneCallNotification(packageName, title, text)) {
-            Log.i(TAG, "🔔 PHONE NOTIFICATION DETECTED!")
-            Log.i(TAG, "Package matches phone app: $packageName")
-        }
-
-        // Route notification based on package name
-        when (packageName) {
-            "com.google.android.apps.maps" -> handleGoogleMapsNotification(sbn, title, text, bigText)
+        // Use generic classifier for ALL notifications (configuration-driven)
+        Log.i(TAG, "🔍 Attempting to classify notification from: $packageName")
+        Log.i(TAG, "🔍 Package: $packageName")
+        Log.i(TAG, "🔍 Title: $title")
+        Log.i(TAG, "🔍 Text: $text")
+        Log.i(TAG, "🔍 BigText: $bigText")
+        
+        // CRITICAL: Verify ConfigManager is initialized BEFORE classification
+        try {
+            var testTypes = com.tnvsai.yatramate.config.ConfigManager.getAllNotificationTypes()
+            Log.i(TAG, "✅ ConfigManager check: ${testTypes.size} types available")
             
-            // Universal phone package routing - All Indian device brands
-            "com.android.server.telecom", 
-            "com.android.dialer",
-            "com.android.incallui",
-            "com.android.phone",
-            "com.android.telecom",
-            
-            // Samsung (India's #1 brand - 30% market share)
-            "com.samsung.android.dialer",
-            "com.samsung.android.incallui",
-            "com.samsung.android.phone",
-            
-            // Xiaomi/Redmi (India's #2 brand - 20% market share)
-            "com.miui.phone",
-            "com.miui.incallui",
-            "com.miui.dialer",
-            
-            // OnePlus (8% market share)
-            "com.oneplus.incallui",
-            "com.oneplus.dialer",
-            "com.oneplus.phone",
-            
-            // Realme (12% market share)
-            "com.coloros.incallui",
-            "com.coloros.dialer",
-            "com.coloros.phone",
-            
-            // Vivo (10% market share)
-            "com.vivo.incallui",
-            "com.vivo.dialer",
-            "com.vivo.phone",
-            
-            // Oppo (8% market share)
-            "com.oppo.incallui",
-            "com.oppo.dialer",
-            "com.oppo.phone",
-            
-            // Google Pixel (5% market share)
-            "com.google.android.dialer",
-            "com.google.android.incallui",
-            
-            // Motorola (3% market share)
-            "com.motorola.dialer",
-            "com.motorola.incallui",
-            "com.motorola.phone",
-            
-            // Huawei/Honor
-            "com.huawei.contacts",
-            "com.huawei.incallui",
-            "com.huawei.dialer",
-            "com.hihonor.incallui",
-            
-            // Nokia
-            "com.nokia.dialer",
-            "com.nokia.incallui",
-            
-            // Generic fallbacks
-            "com.android.contacts",
-            "com.android.calllog" -> handlePhoneNotification(sbn, title, text, bigText)
-            
-            else -> {
-                // Check if it's a phone notification by content analysis
-                if (PhoneCallParser.isPhoneCallNotification(packageName, title, text)) {
-                    Log.i(TAG, "Detected phone notification by content analysis: $packageName")
-                    handlePhoneNotification(sbn, title, text, bigText)
-                } else {
-                    Log.d(TAG, "Notification from other app: $packageName")
+            // If no types, force initialization
+            if (testTypes.isEmpty()) {
+                Log.w(TAG, "⚠️ ConfigManager has 0 types! Force initializing...")
+                com.tnvsai.yatramate.config.ConfigManager.initialize(applicationContext)
+                com.tnvsai.yatramate.config.ConfigPersistence.initialize(applicationContext)
+                com.tnvsai.yatramate.config.NotificationConfigManager.initialize(applicationContext)
+                
+                // Retry getting types
+                testTypes = com.tnvsai.yatramate.config.ConfigManager.getAllNotificationTypes()
+                Log.i(TAG, "✅ After force init: ${testTypes.size} types available")
+                
+                if (testTypes.isEmpty()) {
+                    Log.e(TAG, "❌❌❌ STILL 0 TYPES AFTER FORCE INIT! This is a CRITICAL ERROR! ❌❌❌")
+                    Log.e(TAG, "   Check notification_types.json file in assets/config/")
                 }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ ConfigManager check failed! Initializing... ${e.message}", e)
+            try {
+                com.tnvsai.yatramate.config.ConfigManager.initialize(applicationContext)
+                com.tnvsai.yatramate.config.ConfigPersistence.initialize(applicationContext)
+                com.tnvsai.yatramate.config.NotificationConfigManager.initialize(applicationContext)
+                Log.i(TAG, "✅ ConfigManager initialized after exception")
+            } catch (e2: Exception) {
+                Log.e(TAG, "❌ Failed to initialize ConfigManager: ${e2.message}", e2)
+            }
+        }
+        
+        // Classify notification - NOW ALWAYS returns a result (never null)
+        val classified = NotificationClassifier.classifyNotification(packageName, title, text, bigText)
+        
+        // classified is never null now (uses fallback if config fails)
+        if (classified != null) {
+            Log.i(TAG, "✅✅✅ CLASSIFIED as ${classified.type.name} (method: ${classified.classificationMethod}, confidence: ${classified.confidence}) ✅✅✅")
+            
+            // Check if type is enabled (only for config-based classifications)
+            val shouldSendToMCU = if (classified.classificationMethod == "config") {
+                val typeEnabled = com.tnvsai.yatramate.config.NotificationConfigManager.isTypeEnabled(classified.type.id)
+                val appEnabled = com.tnvsai.yatramate.config.NotificationConfigManager.isAppEnabledForType(
+                    classified.type.id, packageName
+                )
+                typeEnabled && appEnabled
+            } else {
+                // Fallback classifications are always enabled (they work even without config)
+                true
+            }
+            
+            Log.i(TAG, "   shouldSendToMCU: $shouldSendToMCU (method: ${classified.classificationMethod})")
+            
+            // Store in unified history (always store, even if not sent to MCU)
+            // Note: Phone calls and navigation use specialized handlers, don't send via generic sendToMCU
+            when (classified.type.id) {
+                "navigation" -> {
+                    Log.i(TAG, "🗺️ Processing navigation notification")
+                    Log.i(TAG, "🗺️ Title: $title, Text: $text, BigText: $bigText")
+                    Log.i(TAG, "🗺️ Extracted data from classifier: ${classified.extractedData}")
+                    Log.i(TAG, "🗺️ shouldSendToMCU: $shouldSendToMCU")
+                    
+                    // Use NotificationParser for better navigation data extraction
+                    val isNavigation = NotificationParser.isNavigationNotification(text ?: "")
+                    Log.d(TAG, "🗺️ isNavigationNotification check: $isNavigation")
+                    var navData = if (isNavigation) {
+                        NotificationParser.parseNotification(text ?: "")
+                    } else {
+                        Log.d(TAG, "🗺️ NotificationParser returned null or isNavigation=false")
+                        null
+                    }
+                    
+                    // If parsing failed but classifier identified it as navigation, use extracted data
+                    if (navData == null && classified.extractedData.containsKey("direction")) {
+                        val directionStr = (classified.extractedData["direction"] as? String ?: "STRAIGHT").uppercase()
+                        val direction = try {
+                            com.tnvsai.yatramate.model.Direction.valueOf(directionStr)
+                        } catch (e: IllegalArgumentException) {
+                            Log.w(TAG, "Invalid direction enum value: $directionStr, defaulting to STRAIGHT")
+                            com.tnvsai.yatramate.model.Direction.STRAIGHT
+                        }
+                        navData = com.tnvsai.yatramate.model.NavigationData(
+                            direction = direction,
+                            distance = classified.extractedData["distance"] as? String ?: "",
+                            maneuver = classified.extractedData["maneuver"] as? String ?: "",
+                            eta = null
+                        )
+                        Log.d(TAG, "Using navigation data from classifier: $navData")
+                    }
+                    
+                    // Navigation uses specialized handler via bleService.sendNavigationData
+                    // This ensures proper formatting and deduplication logic
+                    if (navData != null && shouldSendToMCU) {
+                        Log.i(TAG, "✅ Sending navigation data to MCU: $navData")
+                        bleService?.let { service ->
+                            CoroutineScope(Dispatchers.IO).launch {
+                                service.sendNavigationData(navData!!)
+                            }
+                        }
+                    } else {
+                        if (navData == null) {
+                            Log.w(TAG, "⚠️ Navigation classified but could not parse data, not sending to MCU")
+                        } else if (!shouldSendToMCU) {
+                            Log.d(TAG, "⚠️ Navigation data available but not sending to MCU (disabled)")
+                        }
+                    }
+                    
+                    storeNotificationForDebugging(
+                        packageName, title, text, bigText, 
+                        isGoogleMaps = packageName == "com.google.android.apps.maps",
+                        isNavigation = navData != null,
+                        parsedData = navData?.toString(),
+                        navigationData = navData,
+                        sentToMCU = shouldSendToMCU && navData != null,
+                        parsingMethod = "NotificationClassifier",
+                        parserName = "Generic"
+                    )
+                }
+                "phone_call" -> {
+                    // Use PhoneCallParser for better phone call data extraction
+                    val phoneCallData = PhoneCallParser.parsePhoneNotification(
+                        packageName, title, text, bigText,
+                        extractPhoneNumberFromExtras(sbn)
+                    )
+                    
+                    if (phoneCallData != null) {
+                        // Phone calls use specialized handler that calls sendPhoneCallData directly
+                        // This ensures proper formatting and deduplication logic
+                        handlePhoneNotification(sbn, title, text, bigText, phoneCallData, shouldSendToMCU)
+                    } else {
+                        // Fallback: store as generic
+                        NotificationHistoryManager.addGenericEntry(
+                            type = "phone_call",
+                            packageName = packageName,
+                            title = title,
+                            text = text,
+                            bigText = bigText,
+                            extractedData = classified.extractedData,
+                            sentToMCU = shouldSendToMCU,
+                            mcuType = classified.type.mcuType,
+                            classificationKeywordsMatched = getMatchedKeywords(classified, title, text),
+                            classificationTitlePatternsMatched = getMatchedTitlePatterns(classified, title),
+                            classificationAppMatched = classified.type.apps.contains(packageName)
+                        )
+                    }
+                }
+                "message" -> {
+                    // Send to MCU if enabled (messages use generic sendToMCU)
+                    if (shouldSendToMCU) {
+                        sendToMCU(classified.type, classified.extractedData)
+                    }
+                    // Store as message entry
+                    NotificationHistoryManager.addMessageEntry(
+                                type = "message",
+                                packageName = packageName,
+                                title = title,
+                                text = text,
+                                bigText = bigText,
+                                sender = title,
+                                message = text,
+                                appName = getAppNameFromPackage(packageName),
+                                messageType = getMessageTypeFromPackage(packageName),
+                                sentToMCU = shouldSendToMCU
+                            )
+                        }
+                        "battery" -> {
+                            // Send to MCU if enabled (battery uses generic sendToMCU)
+                            if (shouldSendToMCU) {
+                                sendToMCU(classified.type, classified.extractedData)
+                            }
+                            // Store as generic entry with battery type
+                            NotificationHistoryManager.addGenericEntry(
+                                type = "battery",
+                                packageName = packageName,
+                                title = title,
+                                text = text,
+                                bigText = bigText,
+                                extractedData = classified.extractedData,
+                                sentToMCU = shouldSendToMCU,
+                                mcuType = classified.type.mcuType,
+                                classificationKeywordsMatched = getMatchedKeywords(classified, title, text),
+                                classificationTitlePatternsMatched = getMatchedTitlePatterns(classified, title),
+                                classificationAppMatched = classified.type.apps.contains(packageName)
+                            )
+                        }
+                        "music" -> {
+                            // Send to MCU if enabled (music uses generic sendToMCU)
+                            if (shouldSendToMCU) {
+                                sendToMCU(classified.type, classified.extractedData)
+                            }
+                            // Store as generic entry with music type
+                            NotificationHistoryManager.addGenericEntry(
+                                type = "music",
+                                packageName = packageName,
+                                title = title,
+                                text = text,
+                                bigText = bigText,
+                                extractedData = classified.extractedData,
+                                sentToMCU = shouldSendToMCU,
+                                mcuType = classified.type.mcuType,
+                                classificationKeywordsMatched = getMatchedKeywords(classified, title, text),
+                                classificationTitlePatternsMatched = getMatchedTitlePatterns(classified, title),
+                                classificationAppMatched = classified.type.apps.contains(packageName)
+                            )
+                        }
+                        else -> {
+                            // Send to MCU if enabled (generic notification types)
+                            if (shouldSendToMCU) {
+                                sendToMCU(classified.type, classified.extractedData)
+                            }
+                            // Store as generic notification entry
+                            NotificationHistoryManager.addGenericEntry(
+                                type = classified.type.id,
+                                packageName = packageName,
+                                title = title,
+                                text = text,
+                                bigText = bigText,
+                                extractedData = classified.extractedData,
+                                sentToMCU = shouldSendToMCU,
+                                mcuType = classified.type.mcuType,
+                                classificationKeywordsMatched = getMatchedKeywords(classified, title, text),
+                                classificationTitlePatternsMatched = getMatchedTitlePatterns(classified, title),
+                                classificationAppMatched = classified.type.apps.contains(packageName),
+                                classificationMethod = classified.classificationMethod
+                            )
+                        }
+                    }
+        } else {
+            // This should never happen now (classifier always returns a result)
+            // But keep as safety fallback
+            Log.e(TAG, "❌❌❌ CRITICAL: NotificationClassifier returned null! This shouldn't happen! ❌❌❌")
+            Log.e(TAG, "❌ Package: $packageName")
+            Log.e(TAG, "❌ Title: $title")
+            Log.e(TAG, "❌ Text: $text")
+            NotificationHistoryManager.addGenericEntry(
+                type = "unknown",
+                packageName = packageName,
+                title = title,
+                text = text,
+                bigText = bigText,
+                extractedData = mapOf("raw_text" to (text ?: "")),
+                sentToMCU = false,
+                mcuType = null,
+                classificationKeywordsMatched = emptyList(),
+                classificationTitlePatternsMatched = emptyList(),
+                classificationAppMatched = false
+            )
         }
     }
-
+    
     private fun handleGoogleMapsNotification(sbn: StatusBarNotification, title: String?, text: String?, bigText: String?) {
         // Combine all text sources
         val fullText = buildString {
@@ -261,15 +476,14 @@ class NotificationListenerService : NotificationListenerService() {
 
         // Parse navigation data if it's a navigation notification
         var parsedData: String? = null
+        var navigationData: NavigationData? = null
         if (isNavigation) {
-            val navigationData = NotificationParser.parseNotification(fullText)
+            navigationData = NotificationParser.parseNotification(fullText)
             parsedData = navigationData?.toString()
 
             if (navigationData != null) {
                 Log.i(TAG, "✅ PARSED NAVIGATION DATA: $navigationData")
                 
-                // Don't log here - will log in WorkingBLEService after sending
-
                 // Send to BLE service
                 bleService?.let { service ->
                     Log.i(TAG, "Sending to BLE service...")
@@ -281,10 +495,30 @@ class NotificationListenerService : NotificationListenerService() {
         }
 
         // Store notification for debugging
-        storeNotificationForDebugging(sbn.packageName, title, text, bigText, true, isNavigation, parsedData)
+        val finalNavigationData = navigationData
+        storeNotificationForDebugging(
+            packageName = sbn.packageName,
+            title = title,
+            text = text,
+            bigText = bigText,
+            isGoogleMaps = true,
+            isNavigation = isNavigation,
+            parsedData = parsedData,
+            navigationData = finalNavigationData,
+            sentToMCU = finalNavigationData != null && bleService != null,
+            parsingMethod = "NotificationParser",
+            parserName = "GoogleMapsParser"
+        )
     }
 
-    private fun handlePhoneNotification(sbn: StatusBarNotification, title: String?, text: String?, bigText: String?) {
+    private fun handlePhoneNotification(
+        sbn: StatusBarNotification, 
+        title: String?, 
+        text: String?, 
+        bigText: String?,
+        phoneCallData: com.tnvsai.yatramate.model.PhoneCallData,
+        shouldSendToMCU: Boolean = true
+    ) {
         Log.i(TAG, "=== PHONE NOTIFICATION RECEIVED ===")
         Log.i(TAG, "Package: ${sbn.packageName}")
         Log.i(TAG, "Title: $title")
@@ -307,16 +541,6 @@ class NotificationListenerService : NotificationListenerService() {
             
             if (phoneNumber != null) {
                 Log.i(TAG, "📞 Phone number found in extras: $phoneNumber")
-            } else {
-                Log.i(TAG, "🔍 No phone number in extras, dumping all key-value pairs:")
-                it.keySet().forEach { key ->
-                    try {
-                        val value = it.get(key)
-                        Log.i(TAG, "  Key='$key', Value='$value' (type: ${value?.javaClass?.simpleName})")
-                    } catch (e: Exception) {
-                        Log.i(TAG, "  Key='$key', Error reading value: ${e.message}")
-                    }
-                }
             }
         }
         
@@ -326,15 +550,6 @@ class NotificationListenerService : NotificationListenerService() {
             if (phoneNumber != null) {
                 Log.i(TAG, "📞 Phone number extracted from text: $phoneNumber")
             }
-        }
-        
-        // Check if it's Samsung dialer specifically
-        if (sbn.packageName.contains("samsung")) {
-            Log.i(TAG, "🔍 SAMSUNG DIALER DETECTED - Enhanced debugging")
-            Log.i(TAG, "Notification ID: ${sbn.id}")
-            Log.i(TAG, "Post time: ${sbn.postTime}")
-            Log.i(TAG, "Full notification extras: ${sbn.notification.extras}")
-            Log.i(TAG, "All extras keys: ${extras?.keySet()}")
         }
         
         // Parse phone call data
@@ -361,7 +576,7 @@ class NotificationListenerService : NotificationListenerService() {
                 sentToMCU = false // Will be updated when actually sent
             )
             
-            // Add to phone debug logs
+            // Keep legacy list for backward compatibility
             phoneDebugLogs.add(0, debugLog)
             if (phoneDebugLogs.size > MAX_PHONE_DEBUG_LOGS) {
                 phoneDebugLogs.removeLast()
@@ -373,77 +588,90 @@ class NotificationListenerService : NotificationListenerService() {
             // Track call state transitions
             val callerKey = "${phoneCallData.callerName}:${phoneCallData.callerNumber}"
             
+            // Add to unified history manager (after tracking setup)
+            val wasOutgoing = outgoingCalls.contains(callerKey)
+            val wasAnswered = incomingCalls[callerKey] ?: false
+            val wasMissed = phoneCallData.callState == CallState.MISSED
+            
+            NotificationHistoryManager.addPhoneCallEntry(
+                log = debugLog,
+                phoneCallData = phoneCallData,
+                sentToMCU = false,  // Will be updated when actually sent
+                deviceProfile = try {
+                    com.tnvsai.yatramate.config.ConfigManager.getActiveDeviceProfile()?.name
+                } catch (e: Exception) {
+                    null
+                },
+                detectionPattern = null,  // Can be extracted from parser if needed
+                wasOutgoing = wasOutgoing,
+                wasAnswered = wasAnswered,
+                wasMissed = wasMissed,
+                phoneNumberFromExtras = extractPhoneNumberFromExtras(sbn)
+            )
+            
             when (phoneCallData.callState) {
                 CallState.INCOMING -> {
                     // Mark this incoming call as not yet answered
                     incomingCalls[callerKey] = false
-                    outgoingCalls.remove(callerKey)  // Remove from outgoing if it was there
+                    outgoingCalls.remove(callerKey)
                     Log.i(TAG, "📞 INCOMING call from $callerKey - marking as not answered")
+                    Log.i(TAG, "📞 INCOMING call - shouldSendToMCU: $shouldSendToMCU")
+                    Log.i(TAG, "📞 INCOMING call - phoneCallData: $phoneCallData")
                     
-                    // Send INCOMING state to MCU
-                    sendPhoneCallData(phoneCallData)
+                    // Send INCOMING state to MCU if enabled
+                    if (shouldSendToMCU) {
+                        Log.i(TAG, "✅ Sending INCOMING call to MCU")
+                        sendPhoneCallData(phoneCallData)
+                    } else {
+                        Log.w(TAG, "⚠️ INCOMING call NOT sent to MCU (shouldSendToMCU=false)")
+                    }
                 }
                 CallState.ONGOING -> {
-                    // Check if this is an outgoing call (never had INCOMING notification)
+                    // Check if this is an outgoing call
                     val wasInitiallyIncoming = incomingCalls.containsKey(callerKey)
                     val isOutgoing = !wasInitiallyIncoming
                     
                     Log.i(TAG, "📞 ONGOING call - isOutgoing: $isOutgoing")
-                    Log.i(TAG, "   wasInitiallyIncoming: $wasInitiallyIncoming")
-                    Log.i(TAG, "   incomingCalls.containsKey('$callerKey'): $wasInitiallyIncoming")
-                    Log.i(TAG, "   incomingCalls: $incomingCalls")
                     
                     if (isOutgoing) {
-                        // This is a true outgoing call from the start
+                        // This is a true outgoing call
                         outgoingCalls.add(callerKey)
-                        Log.i(TAG, "📞 OUTGOING call to $callerKey - added to outgoingCalls")
-                        Log.i(TAG, "   outgoingCalls now: $outgoingCalls")
-                    } else if (wasInitiallyIncoming && !incomingCalls[callerKey]!!) {
-                        // This was initially INCOMING but never answered, now ONGOING
-                        // This is likely a misclassified outgoing call!
-                        correctedOutgoingCalls.add(callerKey)
-                        outgoingCalls.add(callerKey)
-                        Log.i(TAG, "🔄 CORRECTED OUTGOING: Call was misclassified as INCOMING, now correctly identified as OUTGOING")
-                        Log.i(TAG, "   added to correctedOutgoingCalls: $correctedOutgoingCalls")
-                        Log.i(TAG, "   added to outgoingCalls: $outgoingCalls")
+                        Log.i(TAG, "📞 OUTGOING call to $callerKey - SENDING TO MCU")
                         
-                        // Clean up incoming tracking
-                        incomingCalls.remove(callerKey)
+                        // Send ONGOING state to MCU immediately for outgoing calls
+                        if (shouldSendToMCU) {
+                            Log.i(TAG, "✅ Sending OUTGOING call ONGOING state to MCU")
+                            sendPhoneCallData(phoneCallData)
+                        } else {
+                            Log.w(TAG, "⚠️ OUTGOING call not sent to MCU (shouldSendToMCU=false)")
+                        }
                     } else {
                         // Call was answered
                         incomingCalls[callerKey] = true
                         outgoingCalls.remove(callerKey)
-                        correctedOutgoingCalls.remove(callerKey)  // Remove from corrected if it was there
                         Log.i(TAG, "✅ Call answered - marking $callerKey as answered")
                         
-                        // Clear any pending missed call tracking for this caller
-                        val missedCallKeyToRemove = "$callerKey"
-                        if (sentMissedCallsTime.containsKey(missedCallKeyToRemove)) {
-                            sentMissedCallsTime.remove(missedCallKeyToRemove)
-                            Log.i(TAG, "🗑️ Cleared missed call tracking for answered call: $missedCallKeyToRemove")
+                        // Send ONGOING state to MCU for answered incoming calls
+                        if (shouldSendToMCU) {
+                            sendPhoneCallData(phoneCallData)
                         }
                     }
-                    
-                    // Send ONGOING state to MCU
-                    sendPhoneCallData(phoneCallData)
                 }
                 CallState.ENDED -> {
                     // Check if this was an outgoing call
                     val wasOutgoing = outgoingCalls.contains(callerKey)
                     val wasAnswered = incomingCalls[callerKey] ?: false
                     
-                    Log.i(TAG, "📴 Call ended - callerKey='$callerKey'")
-                    Log.i(TAG, "   wasOutgoing: $wasOutgoing (outgoingCalls: $outgoingCalls)")
-                    Log.i(TAG, "   wasAnswered: $wasAnswered (incomingCalls: $incomingCalls)")
-                    
                     if (wasOutgoing) {
-                        // This was an outgoing call that ended normally
-                        Log.i(TAG, "📞 Outgoing call ended normally - NO ACTION NEEDED")
-                        // Clean up tracking
+                        // This was an outgoing call that ended - send ENDED to MCU if enabled
+                        Log.i(TAG, "📞 Outgoing call ended - sending ENDED state to MCU")
+                        if (shouldSendToMCU) {
+                            sendPhoneCallData(phoneCallData)
+                        }
                         outgoingCalls.remove(callerKey)
                     } else if (!wasAnswered) {
-                        // This was an unanswered incoming call - send MISSED state
-                        Log.i(TAG, "❌ Detected MISSED incoming call - caller never answered")
+                        // This was an unanswered incoming call
+                        Log.i(TAG, "❌ Detected MISSED incoming call")
                         val missedCallData = PhoneCallData(
                             callerName = phoneCallData.callerName,
                             callerNumber = phoneCallData.callerNumber,
@@ -451,19 +679,25 @@ class NotificationListenerService : NotificationListenerService() {
                             duration = 0
                         )
                         processMissedCall(missedCallData)
-                        // Clean up tracking
                         incomingCalls.remove(callerKey)
                     } else {
-                        // This was an answered call that ended normally
-                        Log.i(TAG, "✅ Answered call ended normally - NO ACTION NEEDED")
-                        // Clean up tracking
+                        // This was an answered call - send ENDED to MCU if enabled
+                        Log.i(TAG, "✅ Answered call ended - sending ENDED state to MCU")
+                        if (shouldSendToMCU) {
+                            sendPhoneCallData(phoneCallData)
+                        }
                         incomingCalls.remove(callerKey)
                     }
                 }
                 CallState.MISSED -> {
-                    // Direct MISSED notification from system
+                    // Direct MISSED notification
                     Log.i(TAG, "❌ Direct MISSED call notification received")
-                    processMissedCall(phoneCallData)
+                    if (shouldSendToMCU) {
+                        processMissedCall(phoneCallData)
+                    } else {
+                        // Still process for history but don't send to MCU
+                        processMissedCall(phoneCallData, sendToMCU = false)
+                    }
                 }
             }
             
@@ -479,8 +713,69 @@ class NotificationListenerService : NotificationListenerService() {
             )
         } else {
             Log.w(TAG, "Failed to parse phone call data")
-            // Store notification for debugging
             storeNotificationForDebugging(sbn.packageName, title, text, bigText, false, false, null)
+        }
+    }
+    
+    private fun sendToMCU(type: com.tnvsai.yatramate.config.models.NotificationType, data: Map<String, Any>) {
+        try {
+            val transformer = com.tnvsai.yatramate.config.ConfigManager.getActiveTransformer()
+            // Use type.id as the key to look up notification type config, not mcuType
+            val payload = transformer.transformNotification(type.id, data)
+            
+            Log.d(TAG, "Sending to MCU: $payload")
+            
+            // Send via BLE
+            bleService?.let { service ->
+                CoroutineScope(Dispatchers.IO).launch {
+                    // For now, we'll use the existing BLE service methods
+                    // In the future, we can add a generic sendData method
+                    when (type.id) {
+                        "navigation" -> {
+                            // Convert back to NavigationData for compatibility
+                            val directionStr = (data["direction"] as? String ?: "STRAIGHT").uppercase()
+                            val direction = try {
+                                com.tnvsai.yatramate.model.Direction.valueOf(directionStr)
+                            } catch (e: IllegalArgumentException) {
+                                Log.w(TAG, "Invalid direction enum value: $directionStr, defaulting to STRAIGHT")
+                                com.tnvsai.yatramate.model.Direction.STRAIGHT
+                            }
+                            val navigationData = com.tnvsai.yatramate.model.NavigationData(
+                                direction = direction,
+                                distance = data["distance"] as? String ?: "",
+                                maneuver = data["maneuver"] as? String ?: "",
+                                eta = null
+                            )
+                            service.sendNavigationData(navigationData)
+                        }
+                        "phone_call" -> {
+                            // Convert back to PhoneCallData for compatibility
+                            val stateStr = (data["state"] as? String ?: "INCOMING").uppercase()
+                            val callState = try {
+                                com.tnvsai.yatramate.model.CallState.valueOf(stateStr)
+                            } catch (e: IllegalArgumentException) {
+                                Log.w(TAG, "Invalid call state enum value: $stateStr, defaulting to INCOMING")
+                                com.tnvsai.yatramate.model.CallState.INCOMING
+                            }
+                            val phoneCallData = com.tnvsai.yatramate.model.PhoneCallData(
+                                callerName = data["caller"] as? String,
+                                callerNumber = data["caller"] as? String ?: "",
+                                callState = callState,
+                                duration = 0
+                            )
+                            service.sendPhoneCallData(phoneCallData)
+                        }
+                        else -> {
+                            // For other notification types, send raw JSON via BLE
+                            Log.i(TAG, "Sending generic notification type ${type.id} to MCU")
+                            service.sendRawData(payload)
+                        }
+                    }
+                }
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending to MCU: ${e.message}")
         }
     }
 
@@ -491,7 +786,12 @@ class NotificationListenerService : NotificationListenerService() {
         bigText: String?,
         isGoogleMaps: Boolean,
         isNavigation: Boolean,
-        parsedData: String?
+        parsedData: String?,
+        navigationData: NavigationData? = null,
+        sentToMCU: Boolean = false,
+        debugInfo: DebugInfo = DebugInfo(),
+        parsingMethod: String? = null,
+        parserName: String? = null
     ) {
         val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         val notificationInfo = NotificationInfo(
@@ -505,7 +805,36 @@ class NotificationListenerService : NotificationListenerService() {
             parsedData = parsedData
         )
 
-        // Add to recent notifications list
+        // Only store as navigation entry if it's actually a navigation notification
+        if (isNavigation && navigationData != null) {
+            // Add to unified history manager as navigation entry
+            NotificationHistoryManager.addNavigationEntry(
+                info = notificationInfo,
+                navigationData = navigationData,
+                sentToMCU = sentToMCU,
+                debugInfo = debugInfo,
+                parsingMethod = parsingMethod,
+                parserName = parserName
+            )
+        } else {
+            // Not a valid navigation notification - store as generic/unknown
+            Log.d(TAG, "Notification from $packageName marked as NOT navigation - storing as generic")
+            NotificationHistoryManager.addGenericEntry(
+                type = "unknown",
+                packageName = packageName,
+                title = title,
+                text = text,
+                bigText = bigText,
+                extractedData = mapOf("raw_text" to (text ?: ""), "isGoogleMaps" to isGoogleMaps, "isNavigation" to isNavigation),
+                sentToMCU = sentToMCU,
+                mcuType = null,
+                classificationKeywordsMatched = emptyList(),
+                classificationTitlePatternsMatched = emptyList(),
+                classificationAppMatched = false
+            )
+        }
+
+        // Keep legacy list for backward compatibility
         recentNotifications.add(0, notificationInfo) // Add to beginning
         if (recentNotifications.size > MAX_RECENT_NOTIFICATIONS) {
             recentNotifications.removeAt(recentNotifications.size - 1) // Remove oldest
@@ -599,8 +928,15 @@ class NotificationListenerService : NotificationListenerService() {
                     // Clean up tracking
                     incomingCalls.remove(callerKey)
                 } else {
-                    // This was an answered call - clean up tracking
-                    Log.i(TAG, "✅ Answered call ended normally - NO ACTION NEEDED")
+                    // This was an answered call that ended - send ENDED state to MCU
+                    Log.i(TAG, "✅ Answered call ended - sending ENDED state to MCU")
+                    val endedCallData = PhoneCallData(
+                        callerName = phoneCallData.callerName,
+                        callerNumber = phoneCallData.callerNumber,
+                        callState = CallState.ENDED,
+                        duration = 0
+                    )
+                    sendPhoneCallData(endedCallData)
                     incomingCalls.remove(callerKey)
                 }
             } else {
@@ -654,7 +990,7 @@ class NotificationListenerService : NotificationListenerService() {
         return instance != null && hasNotificationAccess()
     }
     
-    private fun processMissedCall(missedCallData: PhoneCallData) {
+    private fun processMissedCall(missedCallData: PhoneCallData, sendToMCU: Boolean = true) {
         val missedCallKey = "${missedCallData.callerName}:${missedCallData.callerNumber}"
         val currentTime = System.currentTimeMillis()
         
@@ -669,12 +1005,15 @@ class NotificationListenerService : NotificationListenerService() {
             return
         }
         
-        // Update timestamp and send
-        sentMissedCallsTime[missedCallKey] = currentTime
-        Log.i(TAG, "✅ Sending MISSED call (new or expired): $missedCallKey")
-        Log.i(TAG, "📤 Calling sendPhoneCallData...")
-        
-        sendPhoneCallData(missedCallData)
+        // Update timestamp and send (if enabled)
+        if (sendToMCU) {
+            sentMissedCallsTime[missedCallKey] = currentTime
+            Log.i(TAG, "✅ Sending MISSED call (new or expired): $missedCallKey")
+            Log.i(TAG, "📤 Calling sendPhoneCallData...")
+            sendPhoneCallData(missedCallData)
+        } else {
+            Log.d(TAG, "⚠️ MISSED call not sent to MCU (disabled)")
+        }
     }
     
     private fun sendPhoneCallData(phoneCallData: PhoneCallData) {
@@ -696,6 +1035,49 @@ class NotificationListenerService : NotificationListenerService() {
      * Extract phone number from text using regex patterns
      * Supports Indian and international formats
      */
+    private fun extractPhoneNumberFromExtras(sbn: StatusBarNotification): String? {
+        val extras = sbn.notification.extras
+        extras?.let {
+            return it.getCharSequence("android.phoneNumber")?.toString()
+                ?: it.getCharSequence("android.phone_number")?.toString()
+                ?: it.getCharSequence("phone_number")?.toString()
+                ?: it.getCharSequence("number")?.toString()
+                ?: it.getString("android.phoneNumber")
+                ?: it.getString("phone_number")
+                ?: it.getString("number")
+        }
+        return null
+    }
+    
+    private fun getCurrentDeviceProfile(): String? {
+        return try {
+            com.tnvsai.yatramate.config.ConfigManager.getActiveDeviceProfile()?.name
+        } catch (e: Exception) {
+            null
+        }
+    }
+    
+    private fun getMatchedKeywords(
+        classified: ClassifiedNotification,
+        title: String?,
+        text: String?
+    ): List<String> {
+        val allText = "${title ?: ""} ${text ?: ""}".lowercase()
+        return classified.type.keywords.filter { keyword: String ->
+            allText.contains(keyword.lowercase())
+        }
+    }
+    
+    private fun getMatchedTitlePatterns(
+        classified: ClassifiedNotification,
+        title: String?
+    ): List<String> {
+        if (title == null) return emptyList()
+        return classified.type.titlePatterns.filter { pattern: String ->
+            title.contains(pattern, ignoreCase = true)
+        }
+    }
+    
     private fun extractPhoneNumber(text: String?): String? {
         if (text.isNullOrBlank()) return null
         
@@ -734,6 +1116,25 @@ class NotificationListenerService : NotificationListenerService() {
         return null
     }
     
+    private fun getAppNameFromPackage(packageName: String): String {
+        return when {
+            packageName.contains("whatsapp", ignoreCase = true) -> "WhatsApp"
+            packageName.contains("telegram", ignoreCase = true) -> "Telegram"
+            packageName.contains("messaging", ignoreCase = true) -> "Messages"
+            packageName.contains("mms", ignoreCase = true) -> "SMS"
+            else -> packageName.substringAfterLast(".")
+        }
+    }
+    
+    private fun getMessageTypeFromPackage(packageName: String): String? {
+        return when {
+            packageName.contains("whatsapp", ignoreCase = true) -> "whatsapp"
+            packageName.contains("telegram", ignoreCase = true) -> "telegram"
+            packageName.contains("messaging", ignoreCase = true) -> "sms"
+            packageName.contains("mms", ignoreCase = true) -> "sms"
+            else -> null
+        }
+    }
 }
 
 

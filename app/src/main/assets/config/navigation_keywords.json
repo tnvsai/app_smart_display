@@ -1,0 +1,23 @@
+{
+  "version": "1.0",
+  "directions": {
+    "LEFT": ["turn left", "left turn", "go left", "veer left", "bear left", "take left", "head left", "exit left", "merge left", "left at", "turn left at", "left onto", "left on", "left in", "left for"],
+    "RIGHT": ["turn right", "right turn", "go right", "veer right", "bear right", "take right", "head right", "exit right", "merge right", "right at", "turn right at", "right onto", "right on", "right in", "right for"],
+    "STRAIGHT": ["go straight", "continue straight", "straight ahead", "keep straight", "proceed straight", "head straight", "continue on", "continue", "stay straight", "follow road", "head north", "head south", "head east", "head west", "head", "north", "south", "east", "west"],
+    "U_TURN": ["u-turn", "u turn", "make a u-turn", "turn around", "flip a u-turn", "make u-turn", "u turn at"],
+    "SHARP_LEFT": ["sharp left", "sharp left turn", "turn sharp left", "veer sharp left"],
+    "SHARP_RIGHT": ["sharp right", "sharp right turn", "turn sharp right", "veer sharp right"],
+    "SLIGHT_LEFT": ["slight left", "slight left turn", "turn slight left", "veer slight left", "bear slight left", "keep slight left"],
+    "SLIGHT_RIGHT": ["slight right", "slight right turn", "turn slight right", "veer slight right", "bear slight right", "keep slight right"],
+    "MERGE_LEFT": ["merge left", "merge onto left", "merge to left lane", "left merge"],
+    "MERGE_RIGHT": ["merge right", "merge onto right", "merge to right lane", "right merge"],
+    "KEEP_LEFT": ["keep left", "stay left", "use left lane", "left lane", "keep in left lane"],
+    "KEEP_RIGHT": ["keep right", "stay right", "use right lane", "right lane", "keep in right lane", "use right 2 lanes", "use right lanes"],
+    "DESTINATION_REACHED": ["arrive at", "you have arrived", "destination is on", "reached your destination", "you've arrived", "arrived at destination", "destination reached"],
+    "WAYPOINT_REACHED": ["waypoint reached", "reached waypoint", "waypoint complete"]
+  },
+  "maneuvers": ["roundabout", "traffic circle", "rotary", "exit", "ramp", "on-ramp", "off-ramp", "merge", "lane change", "change lanes", "fork", "split", "junction", "intersection", "highway", "freeway", "motorway", "bridge", "tunnel", "overpass", "underpass"],
+  "distance_units": ["m", "km", "mi", "ft"],
+  "navigation_keywords": ["turn", "left", "right", "straight", "continue", "go", "exit", "merge", "ramp", "highway", "street", "road", "miles", "meters", "km", "feet", "yards", "in", "at", "onto", "toward", "via", "head", "north", "south", "east", "west", "navigate", "direction", "route", "destination", "arrive"],
+  "user_additions": []
+}
