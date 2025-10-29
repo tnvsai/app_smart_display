@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "apps": [
+    {
+      "id": "google_maps",
+      "name": "Google Maps",
+      "enabled": true,
+      "package_names": ["com.google.android.apps.maps"],
+      "detection_keywords": ["turn", "left", "right", "miles", "meters", "km"],
+      "title_patterns": ["Google Maps", "Navigation"]
+    }
+  ],
+  "user_apps": []
+}

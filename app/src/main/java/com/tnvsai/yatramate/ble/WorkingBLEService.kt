@@ -27,6 +27,8 @@ import com.tnvsai.yatramate.model.PhoneCallData
 import com.tnvsai.yatramate.model.CallState
 import com.tnvsai.yatramate.notification.NotificationListenerService
 import com.google.gson.Gson
+import com.tnvsai.yatramate.config.ConfigManager
+import com.tnvsai.yatramate.mcu.DataTransformer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,7 +44,10 @@ import java.util.UUID
  * Working BLE Service based on proven SimpleBLEService
  * Includes message queuing and integration with main app
  */
-class WorkingBLEService(private val context: Context) {
+class WorkingBLEService(
+    private val context: Context,
+    private val transformer: DataTransformer = ConfigManager.getActiveTransformer()
+) {
     
     companion object {
         private const val TAG = "WorkingBLEService"
@@ -368,62 +373,14 @@ class WorkingBLEService(private val context: Context) {
         Log.i(TAG, "navigationCharacteristic: $navigationCharacteristic")
         
         try {
-            // Format data as JSON for flexibility
-            val direction = when (navigationData.direction) {
-                Direction.LEFT -> "left"
-                Direction.RIGHT -> "right"
-                Direction.STRAIGHT -> "straight"
-                Direction.U_TURN -> "uturn"
-                Direction.SHARP_LEFT -> "sharp_left"
-                Direction.SHARP_RIGHT -> "sharp_right"
-                Direction.SLIGHT_LEFT -> "slight_left"
-                Direction.SLIGHT_RIGHT -> "slight_right"
-                Direction.ROUNDABOUT_LEFT -> "roundabout_left"
-                Direction.ROUNDABOUT_RIGHT -> "roundabout_right"
-                Direction.ROUNDABOUT_STRAIGHT -> "roundabout_straight"
-                Direction.MERGE_LEFT -> "merge_left"
-                Direction.MERGE_RIGHT -> "merge_right"
-                Direction.KEEP_LEFT -> "keep_left"
-                Direction.KEEP_RIGHT -> "keep_right"
-                Direction.DESTINATION_REACHED -> "destination"
-                Direction.WAYPOINT_REACHED -> "waypoint"
-                else -> "straight"
-            }
-            
-            // Extract numeric distance value (convert to meters)
-            val distance = extractDistanceInMeters(navigationData.distance)
-            val maneuver = navigationData.maneuver ?: ""
-            val icon = when (navigationData.direction) {
-                Direction.LEFT -> "arrow_left"
-                Direction.RIGHT -> "arrow_right"
-                Direction.STRAIGHT -> "arrow_up"
-                Direction.U_TURN -> "arrow_uturn"
-                Direction.SHARP_LEFT -> "arrow_sharp_left"
-                Direction.SHARP_RIGHT -> "arrow_sharp_right"
-                Direction.SLIGHT_LEFT -> "arrow_slight_left"
-                Direction.SLIGHT_RIGHT -> "arrow_slight_right"
-                Direction.ROUNDABOUT_LEFT, Direction.ROUNDABOUT_RIGHT, Direction.ROUNDABOUT_STRAIGHT -> "roundabout"
-                Direction.MERGE_LEFT, Direction.MERGE_RIGHT -> "merge"
-                Direction.KEEP_LEFT, Direction.KEEP_RIGHT -> "lane"
-                Direction.DESTINATION_REACHED -> "destination_flag"
-                Direction.WAYPOINT_REACHED -> "waypoint"
-                else -> "arrow_up"
-            }
-            
-            // Create JSON data
-            val jsonData = mutableMapOf(
-                "type" to navigationData.type.displayName,
-                "direction" to direction,
-                "distance" to distance,
-                "maneuver" to maneuver,
-                "icon" to icon
-            )
-            
-            // Add ETA if available (remove speed)
-            navigationData.eta?.let { jsonData["eta"] = it }
-            
-            val dataString = gson.toJson(jsonData)
+            // Use transformer to convert data to MCU-specific format
+            val dataString = transformer.transformNavigation(navigationData)
             val data = dataString.toByteArray()
+            
+            // Validate payload size
+            if (data.size > transformer.getMaxPayloadSize()) {
+                Log.w(TAG, "Payload size ${data.size} exceeds max ${transformer.getMaxPayloadSize()}")
+            }
             
             Log.i(TAG, "=== BLE JSON DATA TRANSMISSION DEBUG ===")
             Log.i(TAG, "Original NavigationData: $navigationData")
@@ -475,9 +432,11 @@ class WorkingBLEService(private val context: Context) {
         Log.i(TAG, "DEBUG: Is MISSED: ${phoneCallData.callState == CallState.MISSED}")
         Log.i(TAG, "DEBUG: Last sent is null: ${lastSentPhoneCallData == null}")
         
-        // Always send ENDED and MISSED calls regardless of deduplication
+        // Always send ENDED, MISSED, and INCOMING calls regardless of deduplication
+        // (each incoming call is a new event that should be sent)
         if (phoneCallData.callState != CallState.ENDED && 
             phoneCallData.callState != CallState.MISSED &&
+            phoneCallData.callState != CallState.INCOMING &&
             lastSentPhoneCallData != null) {
             val isEqual = isPhoneCallDataEqual(lastSentPhoneCallData!!, phoneCallData)
             Log.i(TAG, "DEBUG: Data is equal: $isEqual")
@@ -495,17 +454,14 @@ class WorkingBLEService(private val context: Context) {
         }
         
         try {
-            // Create JSON data for phone call
-            val jsonData = mutableMapOf(
-                "type" to "phone_call",
-                "caller_name" to (phoneCallData.callerName ?: ""),
-                "caller_number" to phoneCallData.callerNumber,
-                "call_state" to phoneCallData.callState.displayName,
-                "duration" to phoneCallData.duration
-            )
-            
-            val dataString = gson.toJson(jsonData)
+            // Use transformer to convert data to MCU-specific format
+            val dataString = transformer.transformPhoneCall(phoneCallData)
             val data = dataString.toByteArray()
+            
+            // Validate payload size
+            if (data.size > transformer.getMaxPayloadSize()) {
+                Log.w(TAG, "Payload size ${data.size} exceeds max ${transformer.getMaxPayloadSize()}")
+            }
             
             Log.i(TAG, "✅ Sending changed phone call data")
             Log.i(TAG, "=== BLE PHONE CALL DATA TRANSMISSION DEBUG ===")
@@ -515,6 +471,8 @@ class WorkingBLEService(private val context: Context) {
             Log.i(TAG, "Data length: ${data.size}")
             
             navigationCharacteristic?.value = data
+            Log.i(TAG, "📡 PHONE CALL: About to write characteristic, value size: ${data.size} bytes")
+            Log.i(TAG, "📡 PHONE CALL: JSON string being sent: $dataString")
             val writeResult = bluetoothGatt?.writeCharacteristic(navigationCharacteristic)
             Log.i(TAG, "Write result: $writeResult")
             

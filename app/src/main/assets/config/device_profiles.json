@@ -1,0 +1,110 @@
+{
+  "version": "1.0",
+  "profiles": [
+    {
+      "id": "samsung",
+      "name": "Samsung",
+      "manufacturers": ["samsung"],
+      "packages": ["com.samsung.android.dialer", "com.samsung.android.incallui", "com.samsung.android.phone"],
+      "patterns": {
+        "incoming": ["incoming call", "calling", "ringing"],
+        "outgoing": ["Calling...", "dialing", "connecting", "outgoing"],
+        "missed": ["missed call", "missed"],
+        "ended": ["call ended", "call finished"]
+      },
+      "multi_notification": true
+    },
+    {
+      "id": "xiaomi",
+      "name": "Xiaomi/Redmi",
+      "manufacturers": ["Xiaomi", "Redmi"],
+      "packages": ["com.miui.phone", "com.miui.incallui", "com.miui.dialer"],
+      "patterns": {
+        "incoming": ["incoming", "ringing"],
+        "outgoing": ["dialing", "outgoing"],
+        "missed": ["missed call"],
+        "ended": ["call ended"]
+      },
+      "multi_notification": false
+    },
+    {
+      "id": "oneplus",
+      "name": "OnePlus",
+      "manufacturers": ["OnePlus"],
+      "packages": ["com.oneplus.incallui", "com.oneplus.dialer", "com.oneplus.phone"],
+      "patterns": {
+        "incoming": ["incoming", "ringing"],
+        "outgoing": ["calling"],
+        "missed": ["missed call"],
+        "ended": ["call ended"]
+      },
+      "multi_notification": false
+    },
+    {
+      "id": "coloros",
+      "name": "Realme/Oppo/Vivo (ColorOS)",
+      "manufacturers": ["Realme", "Oppo", "Vivo"],
+      "packages": ["com.coloros.incallui", "com.coloros.dialer", "com.coloros.phone", "com.vivo.incallui", "com.vivo.dialer", "com.vivo.phone", "com.oppo.incallui", "com.oppo.dialer", "com.oppo.phone"],
+      "patterns": {
+        "incoming": ["incoming call", "calling"],
+        "outgoing": ["calling", "outgoing"],
+        "missed": ["missed call"],
+        "ended": ["call ended"]
+      },
+      "multi_notification": false
+    },
+    {
+      "id": "google",
+      "name": "Google Pixel",
+      "manufacturers": ["Google"],
+      "packages": ["com.google.android.dialer", "com.google.android.incallui"],
+      "patterns": {
+        "incoming": ["incoming", "ringing"],
+        "outgoing": ["calling"],
+        "missed": ["missed call"],
+        "ended": ["call ended"]
+      },
+      "multi_notification": false
+    },
+    {
+      "id": "motorola",
+      "name": "Motorola",
+      "manufacturers": ["Motorola"],
+      "packages": ["com.motorola.dialer", "com.motorola.incallui", "com.motorola.phone"],
+      "patterns": {
+        "incoming": ["incoming", "ringing"],
+        "outgoing": ["calling"],
+        "missed": ["missed call"],
+        "ended": ["call ended"]
+      },
+      "multi_notification": false
+    },
+    {
+      "id": "huawei",
+      "name": "Huawei/Honor",
+      "manufacturers": ["Huawei", "HONOR"],
+      "packages": ["com.huawei.contacts", "com.huawei.incallui", "com.huawei.dialer", "com.hihonor.incallui"],
+      "patterns": {
+        "incoming": ["incoming", "ringing"],
+        "outgoing": ["calling"],
+        "missed": ["missed call"],
+        "ended": ["call ended"]
+      },
+      "multi_notification": false
+    },
+    {
+      "id": "generic",
+      "name": "Generic Android",
+      "manufacturers": [],
+      "packages": ["com.android.dialer", "com.android.incallui", "com.android.server.telecom", "com.android.phone", "com.android.telecom"],
+      "patterns": {
+        "incoming": ["incoming", "ringing", "call from"],
+        "outgoing": ["calling", "dialing", "outgoing"],
+        "missed": ["missed call", "missed"],
+        "ended": ["call ended", "call finished"]
+      },
+      "multi_notification": false
+    }
+  ],
+  "active_profile": "auto_detect"
+}

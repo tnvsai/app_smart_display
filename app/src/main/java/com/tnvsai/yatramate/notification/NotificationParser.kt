@@ -1,5 +1,6 @@
 package com.tnvsai.yatramate.notification
 
+import com.tnvsai.yatramate.config.ConfigManager
 import com.tnvsai.yatramate.model.Direction
 import com.tnvsai.yatramate.model.NavigationData
 import com.tnvsai.yatramate.utils.ETACalculator
@@ -8,81 +9,60 @@ import java.util.regex.Pattern
 
 /**
  * Parser for extracting navigation data from Google Maps notifications
+ * Now loads keywords from configuration system
  */
 object NotificationParser {
     
     private const val TAG = "NotificationParser"
     
-    // Patterns for extracting navigation information
-    private val directionPatterns = mapOf(
-        Direction.LEFT to listOf(
-            "turn left", "left turn", "go left", "veer left", "bear left",
-            "take left", "head left", "exit left", "merge left", "left at",
-            "turn left at", "left onto", "left on", "left in", "left for"
-        ),
-        Direction.RIGHT to listOf(
-            "turn right", "right turn", "go right", "veer right", "bear right",
-            "take right", "head right", "exit right", "merge right", "right at",
-            "turn right at", "right onto", "right on", "right in", "right for"
-        ),
-        Direction.STRAIGHT to listOf(
-            "go straight", "continue straight", "straight ahead", "keep straight",
-            "proceed straight", "head straight", "continue on", "continue",
-            "stay straight", "follow road", "head north", "head south", 
-            "head east", "head west", "head", "north", "south", "east", "west"
-        ),
-        Direction.U_TURN to listOf(
-            "u-turn", "u turn", "make a u-turn", "turn around", "flip a u-turn",
-            "make u-turn", "u turn at"
-        ),
-        Direction.SHARP_LEFT to listOf(
-            "sharp left", "sharp left turn", "turn sharp left", "veer sharp left"
-        ),
-        Direction.SHARP_RIGHT to listOf(
-            "sharp right", "sharp right turn", "turn sharp right", "veer sharp right"
-        ),
-        Direction.SLIGHT_LEFT to listOf(
-            "slight left", "slight left turn", "turn slight left", "veer slight left",
-            "bear slight left", "keep slight left"
-        ),
-        Direction.SLIGHT_RIGHT to listOf(
-            "slight right", "slight right turn", "turn slight right", "veer slight right",
-            "bear slight right", "keep slight right"
-        ),
-        Direction.MERGE_LEFT to listOf(
-            "merge left", "merge onto left", "merge to left lane", "left merge"
-        ),
-        Direction.MERGE_RIGHT to listOf(
-            "merge right", "merge onto right", "merge to right lane", "right merge"
-        ),
-        Direction.KEEP_LEFT to listOf(
-            "keep left", "stay left", "use left lane", "left lane", "keep in left lane"
-        ),
-        Direction.KEEP_RIGHT to listOf(
-            "keep right", "stay right", "use right lane", "right lane", "keep in right lane",
-            "use right 2 lanes", "use right lanes"
-        ),
-        Direction.DESTINATION_REACHED to listOf(
-            "arrive at", "you have arrived", "destination is on", "reached your destination",
-            "you've arrived", "arrived at destination", "destination reached"
-        ),
-        Direction.WAYPOINT_REACHED to listOf(
-            "waypoint reached", "reached waypoint", "waypoint complete"
-        )
-    )
+    // Patterns loaded dynamically from config
+    private var directionPatterns: Map<Direction, List<String>> = emptyMap()
+    private var maneuverPatterns: List<String> = emptyList()
+    
+    init {
+        loadKeywordsFromConfig()
+    }
+    
+    /**
+     * Load navigation keywords from configuration system
+     */
+    fun loadKeywordsFromConfig() {
+        try {
+            val config = ConfigManager.getNavigationKeywords()
+            
+            // Convert string keys to Direction enum
+            directionPatterns = config.directions.mapNotNull { (key, keywords) ->
+                try {
+                    Direction.valueOf(key) to keywords
+                } catch (e: IllegalArgumentException) {
+                    Log.w(TAG, "Unknown direction key in config: $key")
+                    null
+                }
+            }.toMap()
+            
+            maneuverPatterns = config.maneuvers
+            
+            Log.d(TAG, "Loaded ${directionPatterns.size} direction patterns and ${maneuverPatterns.size} maneuver patterns from config")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading keywords from config: ${e.message}", e)
+            // Fallback to empty patterns
+            directionPatterns = emptyMap()
+            maneuverPatterns = emptyList()
+        }
+    }
+    
+    /**
+     * Add user keyword to configuration
+     */
+    fun addUserKeyword(direction: Direction, keyword: String) {
+        ConfigManager.addUserKeyword(direction.name, keyword)
+        loadKeywordsFromConfig()
+        Log.i(TAG, "Added user keyword: $keyword for direction: ${direction.name}")
+    }
     
     private val distancePattern = Pattern.compile(
         "\\b(\\d+(?:\\.\\d+)?)\\s*(m|meters?|km|kilometers?|mi|miles?|ft|feet?)\\b",
         Pattern.CASE_INSENSITIVE
-    )
-    
-    private val maneuverPatterns = listOf(
-        "roundabout", "traffic circle", "rotary",
-        "exit", "ramp", "on-ramp", "off-ramp",
-        "merge", "lane change", "change lanes",
-        "fork", "split", "junction", "intersection",
-        "highway", "freeway", "motorway",
-        "bridge", "tunnel", "overpass", "underpass"
     )
     
     /**
