@@ -56,10 +56,13 @@ fun HomeScreen(
     val currentNavData by bleService.currentNavigationData.collectAsState()
     
     // Use real data or fallback to defaults
-    val navigationDirection = currentNavData?.direction?.displayName ?: "No navigation"
-    val navigationDistance = currentNavData?.distance ?: "0m"
-    val navigationManeuver = currentNavData?.maneuver ?: "Waiting for navigation..."
-    val navigationETA = currentNavData?.eta ?: "0 min"
+    val navState = currentNavData
+    val hasNavigationData = navState?.let { nav ->
+        val dirName = nav.direction?.displayName
+        val nonStraightDir = !dirName.isNullOrBlank() && dirName.lowercase() != "straight"
+        val distVal = nav.distance?.toIntOrNull() ?: 0
+        nonStraightDir || distVal > 0 || !nav.maneuver.isNullOrBlank() || !nav.eta.isNullOrBlank()
+    } ?: false
     
     // Performance optimization: Use derivedStateOf for computed values
     val isConnected = remember { derivedStateOf { connectionStatus.isConnected } }
@@ -93,6 +96,7 @@ fun HomeScreen(
     val recentNotifications = remember { NotificationListenerService.getRecentNotifications() }
     val phoneDebugLogs = remember { NotificationListenerService.getPhoneDebugLogs() }
     
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -101,12 +105,25 @@ fun HomeScreen(
     ) {
         // Hero: Navigation Data Display
         item(key = "nav-data") {
-            NavigationDataDisplay(
-                direction = navigationDirection,
-                distance = navigationDistance,
-                maneuver = navigationManeuver,
-                eta = navigationETA
-            )
+            if (hasNavigationData && navState != null) {
+                val dir = navState.direction?.displayName.orEmpty()
+                val dist = navState.distance.orEmpty()
+                val manv = navState.maneuver.orEmpty()
+                val etaVal = navState.eta.orEmpty()
+                NavigationDataDisplay(
+                    direction = dir,
+                    distance = dist,
+                    maneuver = manv,
+                    eta = etaVal
+                )
+            } else {
+                Text(
+                    text = "No navigation data received. Start navigation in Google Maps.",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                    color = Color.Gray
+                )
+            }
         }
         
         // Connection Status

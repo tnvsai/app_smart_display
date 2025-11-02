@@ -7,6 +7,18 @@
 #include <Wire.h>
 #include "esp_lcd_touch_axs5106l.h"
 
+// LVGL includes
+#include <lvgl.h>
+#include "lvgl_display_driver.h"
+#include "ui_screens.h"
+#include "ui_theme.h"
+#include "ui_welcome_screen.h"
+#include "ui_idle_screen.h"
+#include "ui_navigation_screen.h"
+#include "ui_incoming_call_screen.h"
+#include "ui_outgoing_call_screen.h"
+#include "ui_missed_call_screen.h"
+
 // Touch variables
 bool touchEnabled = true;
 int touchX = 0;
@@ -71,6 +83,7 @@ String currentDirection = "";
 int currentDistance = 0;
 int scrollOffset = 0;
 unsigned long lastScrollTime = 0;
+unsigned long lastNavUpdate = 0; // Track last time we received nav data
 
 // Phone call state
 bool isPhoneCallActive = false;
@@ -125,11 +138,12 @@ void lcd_reg_init(void) {
         WRITE_C8_D8, 0xBE, 0x00, WRITE_C8_D8, 0xDE, 0x02,
         WRITE_COMMAND_8, 0xE5, WRITE_BYTES, 3, 0x00, 0x02, 0x00,
         WRITE_COMMAND_8, 0xE5, WRITE_BYTES, 3, 0x01, 0x02, 0x00,
-        WRITE_C8_D8, 0xDE, 0x00, WRITE_C8_D8, 0x35, 0x00, WRITE_C8_D8, 0x3A, 0x05,
+        // Set pixel format: 16-bit RGB565 (0x55 is standard for ST7789)
+        WRITE_C8_D8, 0xDE, 0x00, WRITE_C8_D8, 0x35, 0x00, WRITE_C8_D8, 0x3A, 0x55,
         WRITE_COMMAND_8, 0x2A, WRITE_BYTES, 4, 0x00, 0x22, 0x00, 0xCD,
         WRITE_COMMAND_8, 0x2B, WRITE_BYTES, 4, 0x00, 0x00, 0x01, 0x3F,
         WRITE_C8_D8, 0xDE, 0x02, WRITE_COMMAND_8, 0xE5, WRITE_BYTES, 3, 0x00, 0x02, 0x00,
-        WRITE_C8_D8, 0xDE, 0x00, WRITE_C8_D8, 0x36, 0x00, WRITE_COMMAND_8, 0x21, END_WRITE,
+        WRITE_C8_D8, 0xDE, 0x00, WRITE_C8_D8, 0x36, 0x08, WRITE_COMMAND_8, 0x21, END_WRITE,
         DELAY, 10, BEGIN_WRITE, WRITE_COMMAND_8, 0x29, END_WRITE
     };
     bus->batchOperation(init_operations, sizeof(init_operations));
@@ -336,6 +350,9 @@ void drawKeepRight(int x, int y) {
 
 // MAIN ARROW FUNCTION
 void drawArrow(String dir) {
+    // DISABLED - LVGL handles all navigation drawing now
+    // Using Arduino_GFX causes overlap with LVGL screens
+    return;
     if (DEBUG_NAVIGATION) {
         Serial.printf("[NAV] Drawing arrow: %s at zone (Y:%d, H:%d)\n", dir.c_str(), ZONE_ARROW_Y, ZONE_ARROW_H);
     }
@@ -369,6 +386,8 @@ void drawArrow(String dir) {
 
 // STATUS BAR (Enhanced with icons)
 void displayStatus(String text, uint16_t color) {
+    // DISABLED - LVGL handles all status display now
+    return;
     gfx->fillRect(0, ZONE_STATUS_Y, SCREEN_WIDTH, ZONE_STATUS_H, COLOR_BLACK);
     
     // Draw Bluetooth icon
@@ -409,6 +428,8 @@ void drawSignalBars(int x, int y, int strength) {
 
 // DISTANCE (Enhanced with color coding and larger font)
 void displayDistance(int dist) {
+    // DISABLED - LVGL handles all distance display now
+    return;
     gfx->fillRect(0, ZONE_DISTANCE_Y, SCREEN_WIDTH, ZONE_DISTANCE_H, COLOR_BLACK);
     
     // Color coding based on distance
@@ -441,6 +462,8 @@ void displayDistance(int dist) {
 
 // ETA DISPLAY (ETA-focused approach)
 void displayETA(String eta) {
+    // DISABLED - LVGL handles all ETA display now
+    return;
     gfx->fillRect(0, ZONE_SPEED_Y, SCREEN_WIDTH, ZONE_SPEED_H, COLOR_BLACK);
     
     // Center the ETA text
@@ -458,7 +481,10 @@ void displayETA(String eta) {
 
 // MANEUVER
 void displayManeuver(String text, bool immediateRender = false) {
+    // DISABLED - LVGL handles all maneuver display now
+    // Keep currentManeuver update for state tracking
     currentManeuver = text;
+    return;
     gfx->fillRect(0, ZONE_MANEUVER_Y, SCREEN_WIDTH, ZONE_MANEUVER_H, COLOR_BLACK);
     
     // Reset scroll offset when text changes or when called with immediateRender
@@ -489,6 +515,10 @@ void displayManeuver(String text, bool immediateRender = false) {
 
 // PHONE CALL DISPLAY FUNCTIONS
 void displayIncomingCall(String name, String number) {
+    // DISABLED - LVGL handles all incoming call screens now
+    // This function is kept for compatibility but does nothing to prevent overlap
+    Serial.println("[CALL] displayIncomingCall() disabled - LVGL handles this");
+    return;
     // Save navigation state before showing call
     if (!isPhoneCallActive && !isMissedCallShowing) {
         wasNavigationActive = true;
@@ -549,44 +579,36 @@ void displayIncomingCall(String name, String number) {
 }
 
 void displayOngoingCall(String name, int duration) {
-    isPhoneCallActive = true;
-    currentCallerName = name;
-    currentCallState = "ONGOING";
-    
-    // Clear screen completely
-    gfx->fillScreen(COLOR_BLACK);
-    
-    // Header - CYAN background box for outgoing call
-    gfx->fillRect(0, 0, SCREEN_WIDTH, 35, COLOR_CYAN);
-    gfx->setCursor(10, 12);
-    gfx->setTextColor(COLOR_WHITE);
-    gfx->setTextSize(1);
-    gfx->print("CALLING...");
-    
-    // Caller name (large, centered, cyan)
-    gfx->setCursor(10, 60);
-    gfx->setTextColor(COLOR_CYAN);
-    gfx->setTextSize(2);
-    gfx->print(name);
-    
-    // Calling animation
-    drawCallingAnimation();
-    
-    // Status text
-    gfx->setCursor(10, 240);
-    gfx->setTextColor(COLOR_GRAY);
-    gfx->setTextSize(1);
-    gfx->print("Connecting...");
-    
-    // Dismiss instruction (at bottom, yellow)
-    gfx->fillRect(0, 285, SCREEN_WIDTH, 35, COLOR_YELLOW);
-    gfx->setCursor(10, 295);
-    gfx->setTextColor(COLOR_BLACK);
-    gfx->setTextSize(1);
-    gfx->print("TAP TO HANG UP");
+    // Arduino_GFX version is DISABLED - LVGL handles all call screens
+    // This function is kept for compatibility but does nothing
+    Serial.println("[CALL] displayOngoingCall() disabled - LVGL handles this");
+    return;
 }
 
 void displayMissedCall(String name, String number, int count) {
+    // Check if we should use LVGL screen instead of Arduino_GFX
+    UIScreen currentScreen = ui_get_current_screen();
+    
+    // If we're on any LVGL screen, use LVGL missed call screen
+    if (currentScreen != UI_SCREEN_NAVIGATION) {
+        // LVGL is handling screens - use LVGL missed call screen
+        Serial.println("[CALL] Using LVGL missed call screen");
+        ui_navigation_hide_all_objects(); // Hide navigation objects
+        ui_show_screen(UI_SCREEN_MISSED_CALL, 0);  // No animation
+        ui_missed_call_screen_update(name.c_str(), number.c_str(), count, "Just now");
+        
+        // Update state
+        isPhoneCallActive = false;
+        isMissedCallShowing = true;
+        currentCallerName = name;
+        currentCallerNumber = number;
+        currentCallState = "MISSED";
+        return;  // Skip Arduino_GFX drawing
+    }
+    
+    // Fallback: Arduino_GFX drawing (for compatibility, but shouldn't normally happen)
+    Serial.println("[CALL] Using Arduino_GFX for missed call (fallback)");
+    
     // Save navigation state before showing missed call (if not already saved)
     if (!isPhoneCallActive && !isMissedCallShowing && !wasNavigationActive) {
         wasNavigationActive = true;
@@ -660,73 +682,72 @@ void clearPhoneDisplay() {
     currentCallerNumber = "";
     currentCallState = "";
     
-    if (DEBUG_CALLS) {
-        Serial.println("[CALL] Phone call dismissed - restoring navigation");
-    }
+    Serial.println("[CALL] Phone call dismissed - checking navigation state");
     
     // Reset scroll offset for clean display
     scrollOffset = 0;
     
-    // Restore navigation from saved state
-    if (wasNavigationActive) {
-        // Restore saved navigation data
-        currentDirection = savedDirection;
-        currentDistance = savedDistance;
-        currentManeuver = savedManeuver;
-        currentETA = savedETA;
+    // Check if we have active navigation data (either saved or current)
+    bool hasNavigation = false;
+    String nav_direction = "";
+    int nav_distance = 0;
+    String nav_maneuver = "";
+    String nav_eta = "";
+    
+    // First check saved navigation state
+    if (wasNavigationActive && savedDirection.length() > 0) {
+        hasNavigation = true;
+        nav_direction = savedDirection;
+        nav_distance = savedDistance;
+        nav_maneuver = savedManeuver;
+        nav_eta = savedETA;
+        Serial.println("[CALL] Using saved navigation state");
+    } 
+    // Else check current navigation data
+    else if (currentDirection.length() > 0 || currentDistance > 0 || currentManeuver.length() > 0 || currentETA.length() > 0) {
+        hasNavigation = true;
+        nav_direction = currentDirection;
+        nav_distance = currentDistance;
+        nav_maneuver = currentManeuver;
+        nav_eta = currentETA;
+        Serial.println("[CALL] Using current navigation data");
+    }
+    
+    if (hasNavigation) {
+        // Go back to NAVIGATION screen
+        Serial.println("[CALL] Returning to navigation screen");
+        ui_show_screen(UI_SCREEN_NAVIGATION, 0);  // No animation
         
-        if (DEBUG_CALLS) {
-            Serial.printf("[CALL] Restoring from saved state - dir:%s, dist:%d, man:%s, eta:%s\n", 
-                          savedDirection.c_str(), savedDistance, savedManeuver.c_str(), savedETA.c_str());
+        // Update navigation screen with data
+        if (nav_direction.length() > 0) {
+            ui_navigation_screen_update_direction(nav_direction.c_str(), false);
         }
-        
-        // Clear screen first
-        gfx->fillScreen(COLOR_BLACK);
-        
-        // Restore all navigation elements in optimal order
-        displayStatus("CONNECTED", COLOR_GREEN);
-        
-        // ETA first
-        if (savedETA.length() > 0) {
-            displayETA(savedETA);
+        if (nav_distance > 0) {
+            ui_navigation_screen_update_distance(nav_distance, false);
         }
-        
-        // Maneuver text second (draw BEFORE arrow, immediate render to avoid delay)
-        if (savedManeuver.length() > 0) {
-            displayManeuver(savedManeuver, true);  // true = immediate render
+        if (nav_maneuver.length() > 0) {
+            ui_navigation_screen_update_maneuver(nav_maneuver.c_str());
         }
-        
-        // Arrow
-        if (savedDirection.length() > 0) {
-            drawArrow(savedDirection);
+        if (nav_eta.length() > 0) {
+            ui_navigation_screen_update_eta(nav_eta.c_str());
         }
+        ui_navigation_screen_show_critical_alert(nav_distance > 0 && nav_distance < 100);
         
-        // Distance
-        if (savedDistance > 0) {
-            displayDistance(savedDistance);
-        }
-        
-        if (DEBUG_CALLS) {
-            Serial.println("[CALL] Navigation restored from saved state");
-        }
+        Serial.println("[CALL] Navigation screen restored");
     } else {
-        // No saved navigation - show current state or empty screen
-        gfx->fillScreen(COLOR_BLACK);
-        displayStatus("CONNECTED", COLOR_GREEN);
-        
-        if (currentDirection.length() > 0 || currentDistance > 0 || currentManeuver.length() > 0 || currentETA.length() > 0) {
-            // Restore current navigation
-            if (currentETA.length() > 0) displayETA(currentETA);
-            if (currentManeuver.length() > 0) displayManeuver(currentManeuver, true);
-            if (currentDirection.length() > 0) drawArrow(currentDirection);
-            if (currentDistance > 0) displayDistance(currentDistance);
-        } else {
-            Serial.println("[CALL] No navigation data to restore");
+        // No navigation - go to IDLE screen
+        Serial.println("[CALL] No navigation active - returning to idle screen");
+        ui_show_screen(UI_SCREEN_IDLE, 0);  // No animation
+        ui_idle_screen_update_ble_status(deviceConnected);
+        if (deviceConnected) {
+            ui_idle_screen_start_pulse();
         }
     }
 }
 
 void drawRingingAnimation() {
+    // DISABLED - LVGL handles call animations now
+    return;
     // Draw pulsing dots for ringing effect
     int centerX = SCREEN_WIDTH / 2;
     int centerY = 200;
@@ -746,6 +767,8 @@ void drawRingingAnimation() {
 }
 
 void drawCallingAnimation() {
+    // DISABLED - LVGL handles call animations now
+    return;
     // Draw pulsing circles for calling/outgoing effect
     int centerX = SCREEN_WIDTH / 2;
     int centerY = 200;
@@ -763,6 +786,8 @@ void drawCallingAnimation() {
 }
 
 void drawMissedCallAnimation() {
+    // DISABLED - LVGL handles call animations now
+    return;
     // Draw animated exclamation mark for missed call
     int centerX = SCREEN_WIDTH / 2;
     int centerY = 200;
@@ -816,13 +841,54 @@ void handlePhoneCallTouch(int x, int y) {
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer *pServer) {
         deviceConnected = true;
-        displayStatus("CONNECTED", COLOR_GREEN); // Green
+        Serial.println("[BLE] Device connected - callback triggered");
+        
+        // Update welcome screen status (if on welcome screen)
+        // Actual transition will happen in loop() to avoid blocking LVGL
+        UIScreen currentScreen = ui_get_current_screen();
+        if (currentScreen == UI_SCREEN_WELCOME) {
+            Serial.println("[BLE] Updating welcome screen status (transition handled in loop())");
+            ui_welcome_screen_update_ble_status(true);
+        } else if (currentScreen == UI_SCREEN_IDLE) {
+            ui_idle_screen_update_ble_status(true);
+            Serial.println("[BLE] Updated idle screen status");
+        }
+        
+        // Transition to idle is handled in loop() to ensure LVGL responsiveness
+        Serial.println("[BLE] Connection callback complete - loop() will handle transition");
     }
     
     void onDisconnect(BLEServer *pServer) {
         deviceConnected = false;
-        displayStatus("DISCONNECTED", COLOR_RED); // Red
-        gfx->fillRect(0, ZONE_ARROW_Y, SCREEN_WIDTH, SCREEN_HEIGHT - ZONE_ARROW_Y, COLOR_BLACK);
+        Serial.println("[BLE] Device disconnected - restarting advertising");
+        
+        // Restart advertising after disconnect
+        // Use non-blocking delay - process LVGL while waiting
+        unsigned long disconnect_start = millis();
+        while (millis() - disconnect_start < 500 && deviceConnected) {
+            lv_timer_handler();
+            delay(10);  // Small delay to avoid CPU spinning
+        }
+        BLEDevice::startAdvertising();
+        Serial.println("[BLE] Restarted advertising - waiting for new connection");
+        
+        // Update screen status based on current screen
+        UIScreen currentScreen = ui_get_current_screen();
+        if (currentScreen == UI_SCREEN_WELCOME) {
+            ui_welcome_screen_update_ble_status(false);
+        } else if (currentScreen == UI_SCREEN_IDLE) {
+            ui_idle_screen_update_ble_status(false);
+        } else if (currentScreen == UI_SCREEN_NAVIGATION) {
+            // Return to welcome screen when disconnected during navigation
+            Serial.println("[BLE] Disconnected during navigation - returning to welcome");
+            ui_show_screen(UI_SCREEN_WELCOME, ANIM_TIME_SCREEN);
+            ui_welcome_screen_update_ble_status(false);
+        }
+        // Call screens don't need BLE status updates
+
+        // Always return to welcome screen on disconnect to reinitiate connection
+        ui_show_screen(UI_SCREEN_WELCOME, 0);
+        ui_welcome_screen_update_ble_status(false);
     }
 };
 
@@ -877,15 +943,49 @@ class MyCallbacks : public BLECharacteristicCallbacks {
                     if (strcmp(callState, "INCOMING") == 0) {
                         // Don't override MISSED state with INCOMING - prioritize missed calls
                         if (!isMissedCallShowing) {
-                            Serial.println("[CALL] Displaying INCOMING call");
+                            Serial.println("[CALL] Displaying INCOMING call via LVGL");
                             phoneCallDisplayStartTime = millis();  // Track display start time
-                            displayIncomingCall(String(callerName ? callerName : "Unknown"), String(callerNumber ? callerNumber : ""));
+                            
+                            // Use LVGL screen instead of Arduino_GFX (NO ANIMATION for stability)
+                            ui_navigation_hide_all_objects(); // Hide navigation objects
+                            ui_show_screen(UI_SCREEN_INCOMING_CALL, 0);
+                            ui_incoming_call_screen_update(
+                                callerName ? callerName : "Unknown",
+                                callerNumber ? callerNumber : ""
+                            );
+                            
+                            // Start ringing animation
+                            ui_incoming_call_screen_start_ringing();
+                            
+                            // DON'T use Arduino_GFX displayIncomingCall - it will overwrite LVGL!
+                            // displayIncomingCall(String(callerName ? callerName : "Unknown"), String(callerNumber ? callerNumber : ""));
+                            Serial.println("[CALL] LVGL incoming call screen should be visible now");
                         } else {
                             Serial.println("[CALL] INCOMING ignored - missed call is showing");
                         }
                     } else if (strcmp(callState, "ONGOING") == 0) {
+                        Serial.println("[CALL] Displaying ONGOING call via LVGL");
                         phoneCallDisplayStartTime = millis();  // Track display start time
-                        displayOngoingCall(String(callerName ? callerName : "Unknown"), duration);
+                        
+                        // Use LVGL screen for ongoing/outgoing calls (NO ANIMATION)
+                        ui_navigation_hide_all_objects(); // Hide navigation objects
+                        ui_show_screen(UI_SCREEN_OUTGOING_CALL, 0);
+                        ui_outgoing_call_screen_update(callerName ? callerName : "Unknown");
+                        
+                        // Update status based on duration (0 = still calling, >0 = connected)
+                        if (duration > 0) {
+                            ui_outgoing_call_screen_set_connecting(false);  // Connected
+                            ui_outgoing_call_screen_update_duration(duration);
+                        } else {
+                            ui_outgoing_call_screen_set_connecting(true);   // Still calling
+                        }
+                        
+                        // Update call state
+                        isPhoneCallActive = true;
+                        currentCallerName = callerName ? String(callerName) : "Unknown";
+                        currentCallState = "ONGOING";
+                        
+                        Serial.println("[CALL] LVGL outgoing/ongoing call screen should be visible now");
                     } else if (strcmp(callState, "MISSED") == 0) {
                         String name = currentCallerName.length() > 0 ? currentCallerName : String(callerName ? callerName : "Unknown");
                         String number = currentCallerNumber.length() > 0 ? currentCallerNumber : String(callerNumber ? callerNumber : "");
@@ -937,45 +1037,75 @@ class MyCallbacks : public BLECharacteristicCallbacks {
                     savedManeuver = currentManeuver;
                     savedETA = currentETA;
                     wasNavigationActive = true;
+                    lastNavUpdate = millis(); // Update last navigation update time
                     
                     if (DEBUG_NAVIGATION) {
                         Serial.printf("[NAV] Stored state - dir:%s, dist:%d, man:%s, eta:%s\n", 
                                       currentDirection.c_str(), currentDistance, currentManeuver.c_str(), currentETA.c_str());
                     }
                     
-                    // Check if direction changed during active call (for visual alert)
-                    bool isDirectionChange = (currentDirection != oldDirection);
-                    if (isPhoneCallActive && isDirectionChange) {
-                        Serial.println("[NAV] Direction changed during call - flashing border");
-                        // Flash border to alert user
-                        // Flash border once (non-blocking - avoid delays in BLE callback)
-                        gfx->drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_YELLOW);
-                        gfx->drawRect(1, 1, SCREEN_WIDTH-2, SCREEN_HEIGHT-2, COLOR_YELLOW);
+                    // Determine if we have real navigation data
+                    bool hasNav = false;
+                    {
+                        const bool dirValid = (currentDirection.length() > 0 && currentDirection != "straight" && currentDirection != "forward");
+                        const bool distValid = (currentDistance > 0);
+                        const bool manValid = (currentManeuver.length() > 0);
+                        const bool etaValid = (currentETA.length() > 0);
+                        hasNav = (dirValid || distValid || manValid || etaValid);
                     }
-                    
-                    // Check if it's a critical navigation update (distance < 100m and direction changed)
-                    bool isCriticalNav = (dist < 100 && isDirectionChange);
-                    if (isPhoneCallActive && isCriticalNav) {
-                        Serial.println("[NAV] Critical update during call - showing alert banner");
-                        // Show alert banner at bottom (non-blocking - avoid delays in BLE callback)
-                        gfx->fillRect(0, SCREEN_HEIGHT-50, SCREEN_WIDTH, 50, COLOR_RED);
-                        gfx->setCursor(10, SCREEN_HEIGHT-35);
-                        gfx->setTextColor(COLOR_WHITE);
-                        gfx->setTextSize(2);
-                        gfx->print(String(dir) + " " + String(dist) + "m");
-                        // Note: Banner will be cleared when navigation redraws
+                    if (hasNav) {
+                        lastNavUpdate = millis(); // Only when real nav present
                     }
-                    
-                    // Only redraw navigation if no call is active
-                    if (!isPhoneCallActive && !isMissedCallShowing) {
-                        // Clear screen and redraw full navigation
-                        gfx->fillScreen(COLOR_BLACK);
-                        displayStatus("CONNECTED", COLOR_GREEN);
+
+                    // Only redraw navigation if no call is active AND we have real nav data
+                    if (!isPhoneCallActive && !isMissedCallShowing && hasNav) {
+                        UIScreen currentScreen = ui_get_current_screen();
                         
-                        if (currentETA.length() > 0) displayETA(currentETA);
-                        if (currentManeuver.length() > 0) displayManeuver(currentManeuver, true);
-                        if (currentDirection.length() > 0) drawArrow(currentDirection);
-                        if (currentDistance > 0) displayDistance(currentDistance);
+                        // Switch to navigation screen if not already there
+                        if (currentScreen != UI_SCREEN_NAVIGATION) {
+                            Serial.println("[NAV] Switching to LVGL navigation screen");
+                            ui_show_screen(UI_SCREEN_NAVIGATION, 0);  // Immediate load, no animation
+                            
+                            // Process LVGL a few times to ensure screen is ready
+                            for (int i = 0; i < 3; i++) {
+                                lv_timer_handler();
+                                delay(1);
+                            }
+                            Serial.println("[NAV] Navigation screen ready");
+                        }
+                        
+                        // Update LVGL navigation screen with latest data
+                        if (currentDirection.length() > 0 && currentDirection != "straight" && currentDirection != "forward") {
+                            ui_navigation_screen_update_direction(currentDirection.c_str(), false);
+                        } else {
+                            // Hide arrows if direction not meaningful
+                            ui_navigation_screen_update_direction("", false);
+                        }
+                        if (currentDistance > 0) {
+                            ui_navigation_screen_update_distance(currentDistance, false);
+                        } else {
+                            ui_navigation_screen_update_distance(0, false);
+                        }
+                        if (currentManeuver.length() > 0) {
+                            ui_navigation_screen_update_maneuver(currentManeuver.c_str());
+                        } else {
+                            ui_navigation_screen_update_maneuver("");
+                        }
+                        if (currentETA.length() > 0) {
+                            ui_navigation_screen_update_eta(currentETA.c_str());
+                        } else {
+                            ui_navigation_screen_update_eta("");
+                        }
+                        
+                        Serial.println("[NAV] Navigation screen updated");
+                    } else if (!isPhoneCallActive && !isMissedCallShowing && !hasNav) {
+                        // No real nav data: ensure we are on idle
+                        if (ui_get_current_screen() != UI_SCREEN_IDLE) {
+                            Serial.println("[NAV] No real nav data - switching to IDLE");
+                            ui_show_screen(UI_SCREEN_IDLE, 0);
+                            ui_idle_screen_set_no_nav_msg(true);
+                            ui_idle_screen_update_ble_status(deviceConnected);
+                        }
                     }
                 }
             }
@@ -991,9 +1121,10 @@ void setup() {
     digitalWrite(GFX_BL, HIGH);
     gfx->begin();
     lcd_reg_init();
-    gfx->fillScreen(0x0000);
     
-    displayStatus("STARTING...", 0xFFE0);
+    // Don't clear screen or draw status here - LVGL will handle display
+    // gfx->fillScreen(0x0000);  // Commented out - LVGL manages display
+    // displayStatus("STARTING...", 0xFFE0);  // Commented out - LVGL shows welcome screen
     
     // Initialize touch
     // Configure I2C pins for touch controller
@@ -1024,13 +1155,65 @@ void setup() {
     pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06);
-    BLEDevice::startAdvertising();
     
-    displayStatus("READY", 0x07E0);
-    Serial.println("ESP32 BLE Ready");
+    Serial.println("[BLE] Starting advertising...");
+    Serial.printf("[BLE] Device name: ESP32_BLE\n");
+    Serial.printf("[BLE] Service UUID: %s\n", SERVICE_UUID);
+    Serial.printf("[BLE] Characteristic UUID: %s\n", CHARACTERISTIC_UUID);
+    
+    BLEDevice::startAdvertising();
+    Serial.println("[BLE] Advertising started - waiting for connection...");
+    Serial.println("[BLE] Make sure your Android app is scanning and connecting to 'ESP32_BLE'");
+    
+    // Initialize LVGL - MUST call lv_init() first (done in lvgl_init)
+    // Then initialize display driver AFTER Arduino_GFX is ready
+    Serial.println("[LVGL] Initializing LVGL...");
+    lvgl_init();  // This calls lv_init() internally
+    
+    // Initialize display driver (allocates buffers, sets up flush callback)
+    lvgl_display_init(gfx);
+    
+    // Initialize touch input device for LVGL
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = lvgl_touchpad_read;
+    indev = lv_indev_drv_register(&indev_drv);
+    Serial.println("[LVGL] Touch input device registered");
+    
+    // Initialize UI theme first (before screens)
+    ui_theme_init();
+    
+    // Initialize all UI screens
+    ui_screens_init();
+    Serial.println("[LVGL] All UI screens initialized");
+    
+    // Show welcome screen initially (will auto-transition to idle when BLE connects)
+    Serial.println("[LVGL] About to show welcome screen...");
+    ui_show_screen(UI_SCREEN_WELCOME, 0);  // No animation for immediate display
+    ui_welcome_screen_update_ble_status(deviceConnected);
+    Serial.println("[LVGL] Welcome screen displayed");
+    Serial.println("[LVGL] Make sure to call lv_timer_handler() in loop()!");
+    
+    // Force first render by calling timer handler a few times
+    for (int i = 0; i < 10; i++) {
+        lv_timer_handler();
+        delay(10);
+    }
+    Serial.println("[LVGL] Initial render completed");
+    
+    // Register dismiss callbacks for all call screens
+    Serial.println("[UI] Registering dismiss callbacks for all call screens...");
+    ui_incoming_call_screen_set_callbacks(nullptr, clearPhoneDisplay);
+    ui_outgoing_call_screen_set_hangup_callback(clearPhoneDisplay);
+    ui_missed_call_screen_set_dismiss_callback(clearPhoneDisplay);
+    Serial.println("[UI] All dismiss callbacks registered");
 }
 
 void loop() {
+    // LVGL task handler (must be called every 5-10ms for smooth UI)
+    // This is CRITICAL - without this, LVGL screens won't update!
+    lv_timer_handler();
+    
     // Check for touch input using library's functions
     if (touchEnabled) {
         touch_data_t touch_data;
@@ -1072,35 +1255,117 @@ void loop() {
             Serial.println("Incoming call timeout - treating as missed");
             displayMissedCall(currentCallerName, currentCallerNumber, 1);
         } else {
-            drawRingingAnimation();
+            // Animation disabled - LVGL handles this
+            // drawRingingAnimation();
         }
     }
     
     // Periodic missed call reminder (if not acknowledged and timeout passed)
+    // NOTE: Removed blocking delay() - use state machine instead to avoid freezing LVGL
+    static unsigned long missedCallReminderStartTime = 0;
+    static bool showingMissedCallReminder = false;
+    
     if (!persistentMissedCall.acknowledged && persistentMissedCall.count > 0) {
         unsigned long currentTime = millis();
         
-        // Check if initial display time has passed (10 seconds) OR if already in reminder mode (lastMissedCallReminderTime > 0)
+        // Check if initial display time has passed (10 seconds) OR if already in reminder mode
         if (currentTime - persistentMissedCall.firstMissedTime > INITIAL_MISSED_CALL_DISPLAY_TIME || lastMissedCallReminderTime > 0) {
-            // Now show periodic reminders every 60 seconds
-            if (currentTime - lastMissedCallReminderTime > MISSED_CALL_REMINDER_INTERVAL) {
-                // Briefly show missed call notification (5 seconds), then restore navigation
+            // Check if it's time for a new reminder (every 60 seconds)
+            if (!showingMissedCallReminder && (currentTime - lastMissedCallReminderTime > MISSED_CALL_REMINDER_INTERVAL)) {
+                // Start showing reminder
                 if (DEBUG_CALLS) {
                     Serial.printf("[CALL] Showing missed call reminder: %s (%d times)\n", 
                                   persistentMissedCall.callerName.c_str(), persistentMissedCall.count);
                 }
-                
                 displayMissedCall(persistentMissedCall.callerName, 
                                   persistentMissedCall.callerNumber, 
                                   persistentMissedCall.count);
-                delay(REMINDER_DISPLAY_TIME);
-                clearPhoneDisplay();  // This restores navigation
-                lastMissedCallReminderTime = currentTime;  // Update to current time after delay
+                missedCallReminderStartTime = currentTime;
+                showingMissedCallReminder = true;
+                lastMissedCallReminderTime = currentTime;
             }
+            
+            // After REMINDER_DISPLAY_TIME, restore navigation (non-blocking)
+            if (showingMissedCallReminder && (currentTime - missedCallReminderStartTime > REMINDER_DISPLAY_TIME)) {
+                clearPhoneDisplay();  // This restores navigation
+                showingMissedCallReminder = false;
+            }
+        }
+    } else {
+        // Reset reminder state if call was acknowledged
+        showingMissedCallReminder = false;
+        missedCallReminderStartTime = 0;
+    }
+    
+    // Update screen BLE status based on current screen
+    static bool lastBleState = false;
+    static unsigned long lastBleStateChangeTime = 0;
+    
+    if (deviceConnected != lastBleState) {
+        Serial.printf("[BLE] State changed: %d -> %d\n", lastBleState, deviceConnected);
+        lastBleStateChangeTime = millis();
+        UIScreen currentScreen = ui_get_current_screen();
+        if (currentScreen == UI_SCREEN_WELCOME) {
+            ui_welcome_screen_update_ble_status(deviceConnected);
+            Serial.println("[BLE] Updated welcome screen status");
+        } else if (currentScreen == UI_SCREEN_IDLE) {
+            ui_idle_screen_update_ble_status(deviceConnected);
+            Serial.println("[BLE] Updated idle screen status");
+        }
+        lastBleState = deviceConnected;
+    }
+    
+    // Auto-transition: Welcome → Idle when BLE connects (if still on welcome)
+    // Add small delay after BLE state change to ensure UI updates properly
+    UIScreen currentScreen = ui_get_current_screen();
+    if (deviceConnected && 
+        currentScreen != UI_SCREEN_INCOMING_CALL && 
+        currentScreen != UI_SCREEN_OUTGOING_CALL && 
+        currentScreen != UI_SCREEN_MISSED_CALL &&
+        currentScreen != UI_SCREEN_NAVIGATION &&
+        currentScreen != UI_SCREEN_IDLE &&
+        currentScreen != UI_SCREEN_WELCOME) {
+        const bool dirValid = (currentDirection.length() > 0 && currentDirection != "straight" && currentDirection != "forward");
+        const bool distValid = (currentDistance > 0);
+        const bool manValid = (currentManeuver.length() > 0);
+        const bool etaValid = (currentETA.length() > 0);
+        bool hasNavAuto = (dirValid || distValid || manValid || etaValid);
+        if (hasNavAuto) {
+            ui_show_screen(UI_SCREEN_NAVIGATION, 0);
+            if (dirValid) ui_navigation_screen_update_direction(currentDirection.c_str(), false);
+            if (currentDistance > 0) ui_navigation_screen_update_distance(currentDistance, false);
+            if (manValid) ui_navigation_screen_update_maneuver(currentManeuver.c_str());
+            if (etaValid) ui_navigation_screen_update_eta(currentETA.c_str());
+        } else {
+            ui_show_screen(UI_SCREEN_IDLE, 0);
+            ui_idle_screen_set_no_nav_msg(true);
+            ui_idle_screen_update_ble_status(deviceConnected);
+            ui_idle_screen_start_pulse();
         }
     }
     
-    delay(100);
+    // Periodic status reporting
+    static unsigned long lastHeartbeat = 0;
+    static unsigned long lastBleAdvertiseCheck = 0;
+    
+    if (millis() - lastHeartbeat > 1000) {
+        Serial.println("[HEARTBEAT] Loop running, LVGL active");
+        Serial.printf("[STATUS] BLE connected: %d, Current screen: %d\n", deviceConnected, (int)ui_get_current_screen());
+        lastHeartbeat = millis();
+    }
+    
+    // Periodically check/advertise BLE if disconnected
+    if (millis() - lastBleAdvertiseCheck > 5000 && !deviceConnected) {
+        if (BLEDevice::getInitialized()) {
+            // Try to restart advertising if it stopped
+            BLEDevice::startAdvertising();
+            Serial.println("[BLE] Restarting advertising (still not connected)");
+        }
+        lastBleAdvertiseCheck = millis();
+    }
+    
+    // Minimal delay - LVGL needs frequent updates (5ms is good)
+    delay(5);
 }
 
 // Touch functions are provided by the library - no need to implement them

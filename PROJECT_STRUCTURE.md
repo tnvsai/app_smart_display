@@ -172,53 +172,44 @@ All data is transmitted as JSON strings:
 ### File Structure
 
 ```
-smart_display_main.ino
-├── Includes and Libraries
-│   ├── Arduino_GFX_Library
-│   ├── BLE Libraries (ESP32)
-│   ├── ArduinoJson
-│   └── Touch Driver (AXS5106L)
-├── Configuration Constants
-│   ├── BLE UUIDs
-│   ├── Display pin definitions
-│   ├── Touch pin definitions
-│   └── Screen layout zones
-├── Global Variables
-│   ├── BLE state
-│   ├── Display state
-│   ├── Touch state
-│   ├── Navigation data cache
-│   └── Phone call state
-├── Display Functions
-│   ├── clearDisplay()
-│   ├── displayNavigation()
-│   ├── displayPhoneCall()
-│   └── drawArrow()
-├── Animation Functions
-│   ├── drawCallingAnimation()
-│   ├── drawMissedCallAnimation()
-│   └── animateDirectionChange()
-├── Touch Handlers
-│   └── handlePhoneCallTouch()
-├── BLE Callbacks
-│   ├── MyCallbacks::onConnect()
-│   ├── MyCallbacks::onDisconnect()
-│   └── MyCallbacks::onWrite()
-└── Main Loop
-    ├── Touch processing
-    ├── Missed call reminders
-    └── Display refresh
+smart_display_main/
+├── smart_display_main.ino         # Main firmware entry point
+├── lvgl_display_driver.h/cpp      # LVGL display & touch initialization
+├── ui_screens.h/cpp                # Screen management & transitions
+├── ui_theme.h/cpp                  # Global UI theme & styles
+├── ui_welcome_screen.h/cpp         # Welcome/boot screen
+├── ui_idle_screen.h/cpp            # Idle screen (BLE connected, no nav)
+├── ui_navigation_screen.h/cpp      # Navigation display
+├── ui_incoming_call_screen.h/cpp   # Incoming call screen
+├── ui_outgoing_call_screen.h/cpp   # Outgoing call screen
+├── ui_missed_call_screen.h/cpp     # Missed call screen
+├── lv_conf.h                       # LVGL configuration
+└── images/                         # UI assets
+
+Arduino Libraries:
+├── Arduino_GFX_Library             # ST7789 display driver
+├── LVGL                            # Graphics framework
+├── BLE Libraries (ESP32)           # Bluetooth Low Energy
+├── ArduinoJson                     # JSON parsing
+├── esp_lcd_touch_axs5106l         # Touch input driver
+└── Wire.h                          # I2C communication
 ```
 
 ### Display Layout
 
-The 172x320 display is divided into zones:
-- **Status bar (0-30px)**: Top status indicator
-- **Speed zone (30-60px)**: Current speed (if available)
-- **Arrow zone (60-160px)**: Direction arrow
-- **Distance zone (160-210px)**: Distance to next maneuver
-- **Maneuver zone (210-260px)**: Turn description
-- **Bottom zone (260-320px)**: Additional info
+The 172x320 display uses LVGL-based screens:
+
+**Navigation Screen** (LVGL):
+- **Status badge (5px)**: Connection status & compass
+- **Arrow zone (40-160px)**: Large directional arrow with animations
+- **Distance display (200px)**: Next maneuver distance
+- **Maneuver text (270px)**: Turn instruction with auto-wrap
+- **ETA banner (300px)**: Estimated arrival time
+
+**Call Screens** (LVGL):
+- **Welcome/Idle**: Status indicators and connection info
+- **Incoming/Outgoing**: Avatar, caller info, pulsing animations
+- **Missed Call**: Persistent notification with dismiss button
 
 ### BLE Processing
 
@@ -228,13 +219,14 @@ The 172x320 display is divided into zones:
 3. Determine data type (navigation/phone)
 4. Process navigation data:
    - Check for direction changes
-   - Update display zones
-   - Flash arrow on direction change
+   - Call `ui_navigation_screen_update_*()` functions
+   - Animate arrow changes with LVGL transitions
 5. Process phone call data:
-   - Handle incoming/outgoing/ended states
-   - Display appropriate animation
-   - Implement missed call reminders
+   - Handle incoming/outgoing/ended/missed states
+   - Switch to appropriate call screen via `ui_show_screen()`
+   - Trigger LVGL animations (pulse, fade, etc.)
 6. Non-blocking execution (no delays in callback)
+7. LVGL handles rendering and animations automatically
 
 ### Priority System
 
@@ -249,20 +241,80 @@ The 172x320 display is divided into zones:
 - Direction changes can override phone calls after timeout
 - Missed calls always take priority
 
-### Touch Handling
+### LVGL Architecture
 
-- **Touch zones**: Full screen
+#### Core Components
+- **Display Driver** (`lvgl_display_driver`): Bridges Arduino_GFX and LVGL
+  - Flush callback: Draws LVGL framebuffers to hardware
+  - Touch input: I2C touch event processing
+  - Buffers: Double-buffered rendering for smooth animations
+  
+- **Screen Manager** (`ui_screens`): Central screen switching
+  - State machine for screen transitions
+  - Fade animations between screens
+  - Screen lifecycle management
+  
+- **Theme System** (`ui_theme`): Global styling
+  - RGB565 color definitions (optimized for daylight)
+  - Typography scales and styles
+  - Animation timing constants
+  - Reusable UI styles
+
+#### Individual Screens
+Each screen module (`ui_*_screen`) provides:
+- `create()`: Initialize UI elements
+- `update_*()`: Update screen data (navigation, call info)
+- `start/stop_animations()`: Control animations
+- Event callbacks for user interactions
+
+#### Touch Handling
+
+- **Touch zones**: Full screen (LVGL handles coordinates)
 - **Actions**:
   - Dismiss missed call reminders
   - No action for navigation or active calls
-- **Debouncing**: 500ms minimum between touches
+- **Debouncing**: Built into LVGL input processing
+
+### Main Loop Processing
+
+The ESP32 main loop (`loop()`) performs the following tasks every 5ms:
+
+1. **LVGL Timer Handler** (`lv_timer_handler()`): Critical for UI updates
+   - Must be called every 5-10ms for smooth animations
+   - Handles rendering, animations, and input processing
+   
+2. **Touch Input Processing**:
+   - Read I2C touch events (if enabled)
+   - Convert coordinates to LVGL format
+   - Process missed call dismiss button
+   
+3. **Missed Call Reminders**:
+   - Periodic pulsing animation (every 2 seconds)
+   - Resume if user missed alert
+   
+4. **BLE State Management**:
+   - Update screen BLE status indicators
+   - Auto-transition Welcome → Idle on connection
+   - Restart advertising if disconnected
+   
+5. **Screen Auto-Navigation**:
+   - Detect when navigation data received during phone call
+   - Transition to navigation screen after call ends
+   
+6. **Heartbeat Logging** (every 1 second):
+   - BLE connection status
+   - Current active screen ID
+   - Debug information
 
 ### Performance Optimizations
 
 1. **Non-blocking BLE**: No delays in onWrite callback
-2. **Efficient rendering**: Clear only changed zones
-3. **Smart updates**: Cache data to prevent unnecessary redraws
-4. **Watchdog safety**: Avoid long-running operations in callbacks
+2. **LVGL rendering**: Automatic partial display updates (dirty regions)
+3. **Smart caching**: Only update UI when data actually changes
+4. **Watchdog safety**: LVGL tasks run in main loop, not callbacks
+5. **Memory efficient**: Shared styles, reusable screen objects
+6. **Touch debouncing**: Built into LVGL touch processing
+7. **Fast loop**: 5ms delay ensures responsive UI while conserving power
 
 ## Communication Protocol Details
 
@@ -291,10 +343,11 @@ The 172x320 display is divided into zones:
 - **Connection loss**: Auto-reconnect on service restart
 
 ### ESP32 Firmware
-- **JSON parsing errors**: Validate required fields
-- **BLE disconnection**: Re-advertise for reconnection
-- **Display errors**: Safe fallback to text-only display
-- **Watchdog resets**: Avoid long delays in callbacks
+- **JSON parsing errors**: Validate required fields before UI updates
+- **BLE disconnection**: Re-advertise for reconnection, show welcome screen
+- **Display errors**: LVGL handles graphics errors gracefully
+- **Memory errors**: Check LVGL heap before UI creation
+- **Watchdog resets**: LVGL tasks in main loop, BLE callbacks non-blocking
 
 ## Security and Privacy
 
@@ -318,10 +371,12 @@ The 172x320 display is divided into zones:
 - **Background operation**: Battery efficient foreground service
 
 ### ESP32 Firmware
-- **Memory**: ~20-30 KB RAM usage
-- **CPU**: <10% during normal operation
-- **Display refresh**: ~30 FPS animations
-- **BLE latency**: <100ms typical
+- **Memory**: ~40-60 KB RAM (LVGL + application)
+- **Flash**: ~800 KB (compiled firmware + LVGL)
+- **CPU**: <15% during normal operation (LVGL rendering)
+- **Display refresh**: 30-60 FPS animations (LVGL optimized)
+- **BLE latency**: <100ms typical (notification to display)
+- **LVGL heap**: ~20 KB allocated for UI
 
 ## Future Enhancements
 
@@ -353,6 +408,9 @@ The 172x320 display is divided into zones:
 - **Framework**: Arduino
 - **Board**: ESP32 (generic)
 - **Flash size**: 4MB (SPIFFS disabled)
+- **Graphics**: LVGL 8.3+ (embedded graphics library)
+- **Display**: Arduino_GFX (ST7789 172x320 TFT)
+- **Touch**: AXS5106L I2C touch controller
 
 ## Development Tools
 
@@ -363,9 +421,11 @@ The 172x320 display is divided into zones:
 - Logcat viewer
 
 ### PlatformIO Features
-- Serial monitor
+- Serial monitor (115200 baud)
 - Flash tools
 - Debugging support
+- LVGL memory profiling
+- Heap monitoring
 
 ## Debugging
 
@@ -376,12 +436,16 @@ The 172x320 display is divided into zones:
 - `PhoneCallParser`: Call parsing logic
 
 ### ESP32 Serial Output
-- Responds with "OK" on successful data receive
-- Prints debug info for errors
-- Shows connection/disconnection events
+- BLE operations: Connection/disconnection events
+- LVGL: Heap usage, rendering stats (if enabled)
+- JSON parsing: Responds with "OK" on successful data receive
+- Error handling: Debug info for parsing errors, memory issues
+- Touch events: Coordinates and touch state (DEBUG_TOUCH flag)
+- Screen transitions: Current screen state changes
 
 ---
 
-**Last Updated**: October 2025  
+**Last Updated**: January 2025  
 **Maintainer**: tnvsai
+**Version**: 2.0 (LVGL-based UI)
 

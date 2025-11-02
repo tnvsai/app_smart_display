@@ -19,6 +19,14 @@
 - Smart call state detection with deduplication
 - Call animations on the ESP32 display
 
+### 🖥️ LVGL-Powered Display
+- Modern UI framework for embedded displays
+- Smooth 30-60 FPS animations and transitions
+- Touch-optimized interface with haptic feedback
+- Modular screen system (welcome, idle, navigation, calls)
+- Memory-efficient rendering with partial updates
+- Bright daylight-optimized colors
+
 ### 🔵 Bluetooth Low Energy (BLE)
 - Stable BLE communication between Android device and ESP32
 - Automatic connection management and reconnection
@@ -182,7 +190,7 @@ YatraMate/
 │   │   │   └── PermissionHandler.kt     # Permission management
 │   │   ├── ui/
 │   │   │   ├── screens/
-│ Sage  │   │   │   └── HomeScreen.kt      # Home screen composable
+│   │   │   │   └── HomeScreen.kt      # Home screen composable
 │   │   │   ├── components/
 │   │   │   │   ├── StatusCard.kt         # Status display card
 │   │   │   │   ├── NavigationDataDisplay.kt  # Navigation display
@@ -199,7 +207,17 @@ YatraMate/
 ├── ardunio_files/
 │   └── src/smart_display_main/
 │       ├── smart_display_main.ino       # ESP32 firmware
-│       └── lv_conf.h                    # LVGL configuration
+│       ├── lvgl_display_driver.h/cpp    # LVGL display & touch driver
+│       ├── ui_screens.h/cpp             # Screen management
+│       ├── ui_theme.h/cpp               # Global UI theme
+│       ├── ui_welcome_screen.h/cpp      # Welcome screen
+│       ├── ui_idle_screen.h/cpp         # Idle screen
+│       ├── ui_navigation_screen.h/cpp   # Navigation display
+│       ├── ui_incoming_call_screen.h/cpp    # Incoming call
+│       ├── ui_outgoing_call_screen.h/cpp    # Outgoing call
+│       ├── ui_missed_call_screen.h/cpp      # Missed call
+│       ├── lv_conf.h                    # LVGL configuration
+│       └── images/                      # UI assets
 ├── build.gradle.kts                     # Root build configuration
 ├── settings.gradle.kts                  # Project settings
 ├── platformio.ini                       # PlatformIO configuration
@@ -246,7 +264,8 @@ YatraMate/
 - Gson for JSON parsing
 
 ### ESP32 Firmware
-- Arduino GFX Library
+- LVGL 8.3+ (Embedded graphics library)
+- Arduino GFX Library (ST7789 display driver)
 - BLE Libraries (ESP32)
 - ArduinoJson
 - Touch driver (AXS5106L)
@@ -269,9 +288,11 @@ YatraMate/
 - **Samsung device issues**: YatraMate includes special handling for Samsung's dialer notifications
 
 ### ESP32 Issues
-- **Display blank**: Check GPIO connections and power supply
+- **Display blank**: Check GPIO connections and power supply, verify LVGL initialization
 - **Touch not working**: Verify I2C connections and reset touch controller
-- **Watchdog resets**: Check serial monitor for error messages
+- **Watchdog resets**: Check serial monitor for error messages, ensure LVGL runs in main loop
+- **UI not updating**: Verify `lv_timer_handler()` is called every 5-10ms in main loop
+- **Memory issues**: Check LVGL heap usage in serial monitor
 
 ## Development
 
@@ -305,7 +326,7 @@ Private project - All rights reserved by tnvsai
 
 **Developer**: tnvsai  
 **Project**: YatraMate  
-**Version**: 1.0
+**Version**: 2.0 (LVGL-based UI)
 
 ## Support
 
